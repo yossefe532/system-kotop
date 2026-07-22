@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.observability import observe_auth_event
 from auth.config import get_auth_config
 from auth.security import (
     AuthTokenError,
@@ -56,6 +57,7 @@ def ensure_roles_and_admin(db: Session) -> None:
             init_username = "admin"
             init_password = "admin12345"
             logger.warning("bootstrap_admin_fallback_enabled username=admin")
+            observe_auth_event("bootstrap_admin_fallback_enabled")
 
     if init_username and init_password:
         admin_user = db.query(User).filter(User.username == init_username).first()
@@ -71,6 +73,7 @@ def ensure_roles_and_admin(db: Session) -> None:
             db.add(admin_user)
             db.commit()
             logger.info("bootstrap_admin_created username=%s", init_username)
+            observe_auth_event("bootstrap_admin_created")
         elif admin_role and admin_role not in admin_user.roles:
             admin_user.roles.append(admin_role)
             db.commit()
@@ -80,14 +83,17 @@ def authenticate_user(db: Session, username: str, password: str, client_ip: str 
     user = db.query(User).filter(User.username == username).first()
     if not user:
         logger.warning("login_failed user=%s reason=user_not_found ip=%s", username, client_ip)
+        observe_auth_event("login_failed_user_not_found")
         return None
 
     if user.locked_until and user.locked_until > now_utc():
         logger.warning("login_blocked user=%s reason=locked ip=%s", username, client_ip)
+        observe_auth_event("login_blocked_locked")
         return None
 
     if not user.is_active:
         logger.warning("login_failed user=%s reason=inactive ip=%s", username, client_ip)
+        observe_auth_event("login_failed_inactive")
         return None
 
     if not verify_password(password, user.hashed_password):
@@ -97,12 +103,14 @@ def authenticate_user(db: Session, username: str, password: str, client_ip: str 
             user.failed_login_attempts = 0
         db.commit()
         logger.warning("login_failed user=%s reason=bad_password ip=%s", username, client_ip)
+        observe_auth_event("login_failed_bad_password")
         return None
 
     user.failed_login_attempts = 0
     user.locked_until = None
     db.commit()
     logger.info("login_success user=%s ip=%s", username, client_ip)
+    observe_auth_event("login_success")
     return user
 
 
@@ -121,6 +129,7 @@ def issue_token_pair(db: Session, user: User, client_ip: str | None, user_agent:
         )
     )
     db.commit()
+    observe_auth_event("token_pair_issued")
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -142,18 +151,23 @@ def rotate_refresh_token(db: Session, refresh_token: str, client_ip: str | None,
         .first()
     )
     if not token_entry:
+        observe_auth_event("refresh_rejected_revoked")
         raise AuthTokenError("Refresh token is revoked")
     if token_entry.expires_at <= now_utc():
+        observe_auth_event("refresh_rejected_expired")
         raise AuthTokenError("Refresh token expired")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
+        observe_auth_event("refresh_rejected_user_missing")
         raise AuthTokenError("User not available")
     if user.token_version != token_version:
+        observe_auth_event("refresh_rejected_version_mismatch")
         raise AuthTokenError("Session version mismatch")
 
     token_entry.revoked_at = now_utc()
     db.commit()
+    observe_auth_event("refresh_rotated")
     return issue_token_pair(db, user, client_ip, user_agent)
 
 
@@ -164,7 +178,9 @@ def revoke_refresh(db: Session, refresh_token: str) -> bool:
         .first()
     )
     if not entry:
+        observe_auth_event("logout_refresh_not_found")
         return False
     entry.revoked_at = now_utc()
     db.commit()
+    observe_auth_event("logout_refresh_revoked")
     return True

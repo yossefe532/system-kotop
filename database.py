@@ -1,6 +1,7 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from app.db.observability import install_database_observability
 
 if os.getenv("RAILWAY_ENVIRONMENT") and not os.getenv("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is required on Railway")
@@ -17,5 +18,6 @@ if DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+install_database_observability(engine, SessionLocal)
 
 Base = declarative_base()

@@ -1,3 +1,5 @@
+import { trackSyncEvent } from '../../services/observabilityClient'
+
 export const enqueueSyncOperation = (setSyncQueue, operation) => {
   setSyncQueue((prev) => [
     ...prev,
@@ -127,10 +129,16 @@ export const processSyncQueueOnce = async ({
   syncInFlightRef.current = true
   setIsSyncing(true)
   let remaining = [...syncQueue]
+  const startedAt = performance.now()
   try {
+    trackSyncEvent('sync_batch_started', { queueDepth: remaining.length })
     await apiRequest('/auth/me')
     while (remaining.length > 0) {
       const op = remaining[0]
+      trackSyncEvent('sync_operation_started', {
+        queueDepth: remaining.length,
+        context: { operationId: op.id, type: op.type, mode: op.mode || null },
+      })
       if (op.type === 'book_upsert') {
         const payload = op.payload
         if (op.mode === 'edit') {
@@ -258,16 +266,35 @@ export const processSyncQueueOnce = async ({
           }),
         })
       }
+      trackSyncEvent('sync_operation_succeeded', {
+        queueDepth: Math.max(remaining.length - 1, 0),
+        context: { operationId: op.id, type: op.type, mode: op.mode || null },
+      })
       remaining.shift()
       setSyncQueue([...remaining])
     }
+    trackSyncEvent('sync_batch_succeeded', {
+      queueDepth: 0,
+      replayDurationMs: Math.round(performance.now() - startedAt),
+    })
   } catch (error) {
     if (isAuthError(error)) {
+      trackSyncEvent('sync_batch_auth_expired', {
+        level: 'warn',
+        queueDepth: remaining.length,
+        replayDurationMs: Math.round(performance.now() - startedAt),
+      })
       handleSessionExpired()
+    } else {
+      trackSyncEvent('sync_batch_failed', {
+        level: 'error',
+        queueDepth: remaining.length,
+        replayDurationMs: Math.round(performance.now() - startedAt),
+        context: { error: error?.message || 'Sync failed' },
+      })
     }
   } finally {
     syncInFlightRef.current = false
     setIsSyncing(false)
   }
 }
-

@@ -49,9 +49,14 @@ from auth.config import get_auth_config
 from auth.dependencies import require_roles
 from auth.router import router as auth_router
 from auth.service import ensure_roles_and_admin
+from app.api.observability import router as observability_router
+from app.core.observability import configure_logging, log_event, observe_http_exception
 from app.db.schema_guard import assert_schema_is_current
+from app.middleware.request_context import RequestContextMiddleware
 
+configure_logging()
 logger = logging.getLogger("pos_api")
+operations_logger = logging.getLogger("pos_api.operations")
 auth_config = get_auth_config()
 
 assert_schema_is_current(engine)
@@ -59,6 +64,7 @@ with SessionLocal() as bootstrap_db:
     ensure_roles_and_admin(bootstrap_db)
 
 app = FastAPI(title="Educon POS API")
+app.add_middleware(RequestContextMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,10 +74,22 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(auth_router)
+app.include_router(observability_router)
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    observe_http_exception(request.url.path, f"HTTP_{exc.status_code}")
+    log_event(
+        logger,
+        logging.WARNING if exc.status_code < 500 else logging.ERROR,
+        "http_exception",
+        path=request.url.path,
+        status_code=exc.status_code,
+        detail=str(exc.detail),
+        request_id=getattr(request.state, "request_id", "-"),
+        user_id=getattr(request.state, "user_id", "-"),
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -86,6 +104,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    observe_http_exception(request.url.path, type(exc).__name__)
+    log_event(
+        logger,
+        logging.ERROR,
+        "unhandled_exception",
+        path=request.url.path,
+        error_type=type(exc).__name__,
+        request_id=getattr(request.state, "request_id", "-"),
+        user_id=getattr(request.state, "user_id", "-"),
+    )
     logger.exception("unhandled_exception path=%s", request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -161,6 +189,14 @@ def create_book(
     db.add(book)
     db.commit()
     db.refresh(book)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "book_created",
+        book_id=book.id,
+        barcode=book.isbn_barcode,
+        stock=book.total_stock,
+    )
     return book
 
 
@@ -192,6 +228,13 @@ def update_book(
         setattr(book, key, value)
     db.commit()
     db.refresh(book)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "book_updated",
+        book_id=book.id,
+        fields=sorted(update_data.keys()),
+    )
     return book
 
 
@@ -364,12 +407,37 @@ def create_transaction(
             )
         db.commit()
         db.refresh(transaction)
+        log_event(
+            operations_logger,
+            logging.INFO,
+            "transaction_committed",
+            transaction_id=transaction.id,
+            student_id=payload.student_id,
+            item_count=len(payload.items),
+            total_amount=total_amount,
+        )
         return transaction
     except HTTPException:
         db.rollback()
+        log_event(
+            operations_logger,
+            logging.WARNING,
+            "transaction_rolled_back",
+            student_id=payload.student_id,
+            item_count=len(payload.items),
+            reason="http_exception",
+        )
         raise
     except Exception:
         db.rollback()
+        log_event(
+            operations_logger,
+            logging.ERROR,
+            "transaction_rolled_back",
+            student_id=payload.student_id,
+            item_count=len(payload.items),
+            reason="unexpected_exception",
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transaction failed")
 
 
@@ -434,6 +502,15 @@ def create_reservation(
         )
     db.commit()
     db.refresh(reservation)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "reservation_created",
+        reservation_id=reservation.id,
+        student_id=payload.student_id,
+        book_id=payload.book_id,
+        quantity=payload.quantity,
+    )
     return reservation
 
 
@@ -460,6 +537,13 @@ def update_reservation(
     reservation.status = payload.status
     db.commit()
     db.refresh(reservation)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "reservation_updated",
+        reservation_id=reservation.id,
+        status=reservation.status,
+    )
     return reservation
 
 
@@ -479,6 +563,14 @@ def cancel_reservation(
         book.reserved_stock = max(0, book.reserved_stock - int(reservation.quantity))
     reservation.status = "cancelled"
     db.commit()
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "reservation_cancelled",
+        reservation_id=reservation.id,
+        book_id=reservation.book_id,
+        student_id=reservation.student_id,
+    )
     return None
 
 
@@ -545,6 +637,15 @@ def create_supply(
         )
     db.commit()
     db.refresh(supply)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "supply_created",
+        supply_id=supply.id,
+        book_id=payload.book_id,
+        quantity=payload.quantity,
+        paid_amount=payload.paid_amount,
+    )
     return supply
 
 
@@ -577,6 +678,14 @@ def archive_receipt(
     db.add(entry)
     db.commit()
     db.refresh(entry)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "receipt_archived",
+        receipt_id=entry.id,
+        transaction_code=payload.transaction_code,
+        receipt_type=payload.receipt_type,
+    )
     return ReceiptArchiveOut(
         id=entry.id,
         transaction_code=entry.transaction_code,
@@ -635,6 +744,14 @@ def finance_report(
     gross_profit = revenue - cogs
     safe_balance = revenue - withdrawals
     supplier_due = float(db.query(func.coalesce(func.sum(Supply.total_cost - Supply.paid_amount), 0.0)).scalar() or 0.0)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "finance_report_generated",
+        revenue=revenue,
+        cogs=cogs,
+        supplier_due=supplier_due,
+    )
     return FinanceReportOut(
         revenue=revenue,
         cogs=cogs,
@@ -671,6 +788,12 @@ def books_report(
         .outerjoin(reserved, reserved.c.book_id == Book.id)
         .all()
     )
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "books_report_generated",
+        row_count=len(rows),
+    )
     return [BookStatsOut(book_id=r.book_id, sold_qty=int(r.sold_qty), pending_reserved_qty=int(r.pending_reserved_qty)) for r in rows]
 
 
@@ -691,6 +814,14 @@ def emergency_withdrawal(
     db.add(transaction)
     db.commit()
     db.refresh(transaction)
+    log_event(
+        operations_logger,
+        logging.WARNING,
+        "emergency_withdrawal_recorded",
+        transaction_id=transaction.id,
+        amount=payload.amount,
+        staff_name=payload.staff_name,
+    )
     return transaction
 
 
@@ -704,6 +835,13 @@ def create_audit_log(
     db.add(log)
     db.commit()
     db.refresh(log)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "audit_log_created",
+        audit_log_id=log.id,
+        action_type=log.action_type,
+    )
     return log
 
 
@@ -739,6 +877,14 @@ def create_inventory_session(
         )
     db.commit()
     db.refresh(session)
+    log_event(
+        operations_logger,
+        logging.INFO,
+        "inventory_session_created",
+        inventory_session_id=session.id,
+        total_cash_found=session.total_cash_found,
+        expected_safe_balance=current_balance,
+    )
     return session
 
 
