@@ -3,6 +3,7 @@ import logging
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 
 from app.core.observability import observe_auth_event, set_request_context
 from auth.security import AuthTokenError, decode_token
@@ -44,7 +45,7 @@ def get_current_user(
 
     user_id = int(payload.get("sub") or 0)
     token_version = int(payload.get("tv") or 0)
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).options(selectinload(User.roles)).filter(User.id == user_id).first()
     if not user or not user.is_active:
         observe_auth_event("inactive_user_rejected")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive")

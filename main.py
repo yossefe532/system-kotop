@@ -2,8 +2,8 @@ import logging
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload, load_only
+from sqlalchemy import func, case
 import json
 
 from database import SessionLocal, engine
@@ -136,11 +136,30 @@ def get_db():
 
 
 def calculate_safe_balance(db: Session) -> float:
-    total_sales = db.query(func.coalesce(func.sum(SafeTransaction.amount), 0.0)).filter(SafeTransaction.type == "sale").scalar()
-    total_withdrawals = db.query(func.coalesce(func.sum(SafeTransaction.amount), 0.0)).filter(
-        SafeTransaction.type.in_(["withdrawal", "emergency", "supply"])
-    ).scalar()
-    return float(total_sales or 0.0) - float(total_withdrawals or 0.0)
+    totals = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (SafeTransaction.type == "sale", SafeTransaction.amount),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label("sales_total"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (SafeTransaction.type.in_(["withdrawal", "emergency", "supply"]), SafeTransaction.amount),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label("withdrawals_total"),
+        )
+        .one()
+    )
+    return float(totals.sales_total or 0.0) - float(totals.withdrawals_total or 0.0)
 
 
 def validate_book_stock(total_stock: int, reserved_stock: int, is_arriving: bool):
@@ -333,24 +352,45 @@ def create_transaction(
     subtotal = 0.0
     reservation_discount = 0.0
     items = []
+    ordered_items = sorted(payload.items, key=lambda item: (item.book_id, item.reservation_id or 0))
+    book_ids = sorted({item.book_id for item in ordered_items})
+    reservation_ids = sorted({item.reservation_id for item in ordered_items if item.reservation_id is not None})
 
     try:
-        for item in payload.items:
+        books = (
+            db.query(Book)
+            .filter(Book.id.in_(book_ids))
+            .order_by(Book.id.asc())
+            .with_for_update()
+            .all()
+        )
+        books_by_id = {book.id: book for book in books}
+
+        reservations_by_id = {}
+        if reservation_ids:
+            reservations = (
+                db.query(Reservation)
+                .filter(Reservation.id.in_(reservation_ids))
+                .order_by(Reservation.id.asc())
+                .with_for_update()
+                .all()
+            )
+            reservations_by_id = {reservation.id: reservation for reservation in reservations}
+
+        if len(books_by_id) != len(book_ids):
+            missing_book_id = next(book_id for book_id in book_ids if book_id not in books_by_id)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Book {missing_book_id} not found")
+
+        if reservation_ids and len(reservations_by_id) != len(reservation_ids):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
+
+        for item in ordered_items:
             if item.quantity <= 0:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid quantity")
-            book = db.query(Book).filter(Book.id == item.book_id).with_for_update().first()
-            if not book:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Book {item.book_id} not found")
+            book = books_by_id[item.book_id]
             reservation = None
             if item.reservation_id is not None:
-                reservation = (
-                    db.query(Reservation)
-                    .filter(Reservation.id == item.reservation_id)
-                    .with_for_update()
-                    .first()
-                )
-                if not reservation:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
+                reservation = reservations_by_id[item.reservation_id]
                 if reservation.status != "pending":
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reservation is not pending")
                 if reservation.student_id != payload.student_id:
@@ -407,13 +447,28 @@ def create_transaction(
             )
         db.commit()
         db.refresh(transaction)
+        transaction = (
+            db.query(Transaction)
+            .options(
+                selectinload(Transaction.items).load_only(
+                    TransactionItem.id,
+                    TransactionItem.transaction_id,
+                    TransactionItem.book_id,
+                    TransactionItem.quantity,
+                    TransactionItem.price_at_sale,
+                    TransactionItem.cost_at_sale,
+                )
+            )
+            .filter(Transaction.id == transaction.id)
+            .first()
+        )
         log_event(
             operations_logger,
             logging.INFO,
             "transaction_committed",
             transaction_id=transaction.id,
             student_id=payload.student_id,
-            item_count=len(payload.items),
+            item_count=len(ordered_items),
             total_amount=total_amount,
         )
         return transaction
@@ -424,7 +479,7 @@ def create_transaction(
             logging.WARNING,
             "transaction_rolled_back",
             student_id=payload.student_id,
-            item_count=len(payload.items),
+            item_count=len(ordered_items),
             reason="http_exception",
         )
         raise
@@ -435,7 +490,7 @@ def create_transaction(
             logging.ERROR,
             "transaction_rolled_back",
             student_id=payload.student_id,
-            item_count=len(payload.items),
+            item_count=len(ordered_items),
             reason="unexpected_exception",
         )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transaction failed")
@@ -448,8 +503,10 @@ def list_reservations(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("cashier", "manager", "admin")),
 ):
+    limit = min(limit, 200)
     return (
         db.query(Reservation)
+        .options(load_only(Reservation.id, Reservation.student_id, Reservation.book_id, Reservation.quantity, Reservation.deposit_amount, Reservation.status, Reservation.staff_name, Reservation.created_at))
         .order_by(Reservation.deposit_amount.desc(), Reservation.created_at.asc())
         .offset(skip)
         .limit(limit)
@@ -581,7 +638,15 @@ def list_safe_transactions(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("manager", "admin")),
 ):
-    return db.query(SafeTransaction).order_by(SafeTransaction.timestamp.desc()).offset(skip).limit(limit).all()
+    limit = min(limit, 200)
+    return (
+        db.query(SafeTransaction)
+        .options(load_only(SafeTransaction.id, SafeTransaction.amount, SafeTransaction.type, SafeTransaction.reason, SafeTransaction.staff_name, SafeTransaction.timestamp))
+        .order_by(SafeTransaction.timestamp.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 @app.get("/transactions", response_model=list[TransactionOut])
@@ -591,7 +656,25 @@ def list_transactions(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("cashier", "manager", "admin")),
 ):
-    return db.query(Transaction).order_by(Transaction.date.desc()).offset(skip).limit(limit).all()
+    limit = min(limit, 200)
+    return (
+        db.query(Transaction)
+        .options(
+            load_only(Transaction.id, Transaction.student_id, Transaction.total_amount, Transaction.discount, Transaction.staff_name, Transaction.date),
+            selectinload(Transaction.items).load_only(
+                TransactionItem.id,
+                TransactionItem.transaction_id,
+                TransactionItem.book_id,
+                TransactionItem.quantity,
+                TransactionItem.price_at_sale,
+                TransactionItem.cost_at_sale,
+            ),
+        )
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 @app.post("/supplies", response_model=SupplyOut, status_code=status.HTTP_201_CREATED)
@@ -656,7 +739,15 @@ def list_supplies(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("manager", "admin")),
 ):
-    return db.query(Supply).order_by(Supply.timestamp.desc()).offset(skip).limit(limit).all()
+    limit = min(limit, 200)
+    return (
+        db.query(Supply)
+        .options(load_only(Supply.id, Supply.book_id, Supply.quantity, Supply.unit_cost, Supply.total_cost, Supply.paid_amount, Supply.supplier_name, Supply.staff_name, Supply.timestamp))
+        .order_by(Supply.timestamp.desc(), Supply.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 @app.post("/receipt-archive", response_model=ReceiptArchiveOut, status_code=status.HTTP_201_CREATED)
@@ -703,7 +794,15 @@ def list_receipt_archive(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("manager", "admin")),
 ):
-    items = db.query(ReceiptArchive).order_by(ReceiptArchive.printed_at.desc()).offset(skip).limit(limit).all()
+    limit = min(limit, 300)
+    items = (
+        db.query(ReceiptArchive)
+        .options(load_only(ReceiptArchive.id, ReceiptArchive.transaction_code, ReceiptArchive.receipt_type, ReceiptArchive.staff_name, ReceiptArchive.payload, ReceiptArchive.printed_at))
+        .order_by(ReceiptArchive.printed_at.desc(), ReceiptArchive.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     result: list[ReceiptArchiveOut] = []
     for entry in items:
         try:
@@ -728,19 +827,32 @@ def finance_report(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("admin")),
 ):
-    revenue = float(
-        db.query(func.coalesce(func.sum(SafeTransaction.amount), 0.0)).filter(SafeTransaction.type == "sale").scalar()
-        or 0.0
+    safe_totals = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (SafeTransaction.type == "sale", SafeTransaction.amount),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label("revenue"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (SafeTransaction.type.in_(["withdrawal", "emergency", "supply"]), SafeTransaction.amount),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label("withdrawals"),
+        )
+        .one()
     )
-    withdrawals = float(
-        db.query(func.coalesce(func.sum(SafeTransaction.amount), 0.0))
-        .filter(SafeTransaction.type.in_(["withdrawal", "emergency", "supply"]))
-        .scalar()
-        or 0.0
-    )
-    cogs = float(
-        db.query(func.coalesce(func.sum(TransactionItem.quantity * TransactionItem.cost_at_sale), 0.0)).scalar() or 0.0
-    )
+    revenue = float(safe_totals.revenue or 0.0)
+    withdrawals = float(safe_totals.withdrawals or 0.0)
+    cogs = float(db.query(func.coalesce(func.sum(TransactionItem.quantity * TransactionItem.cost_at_sale), 0.0)).scalar() or 0.0)
     gross_profit = revenue - cogs
     safe_balance = revenue - withdrawals
     supplier_due = float(db.query(func.coalesce(func.sum(Supply.total_cost - Supply.paid_amount), 0.0)).scalar() or 0.0)
@@ -786,6 +898,7 @@ def books_report(
         )
         .outerjoin(sold, sold.c.book_id == Book.id)
         .outerjoin(reserved, reserved.c.book_id == Book.id)
+        .order_by(Book.id.asc())
         .all()
     )
     log_event(
@@ -852,7 +965,15 @@ def list_inventory_sessions(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("manager", "admin")),
 ):
-    return db.query(InventorySession).order_by(InventorySession.timestamp.desc()).offset(skip).limit(limit).all()
+    limit = min(limit, 200)
+    return (
+        db.query(InventorySession)
+        .options(load_only(InventorySession.id, InventorySession.staff_name, InventorySession.total_cash_found, InventorySession.timestamp))
+        .order_by(InventorySession.timestamp.desc(), InventorySession.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 @app.post("/inventory-sessions", response_model=InventorySessionOut, status_code=status.HTTP_201_CREATED)
