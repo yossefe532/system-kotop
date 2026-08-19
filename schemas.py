@@ -77,6 +77,78 @@ class StudentOut(StudentBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+WALLET_ENTRY_TYPES = Literal[
+    "purchase_debt",
+    "deposit_change",
+    "purchase_wallet",
+    "pickup_wallet",
+    "refund_cancel_reservation",
+    "refund_return_sale",
+    "manual_adjustment",
+    "correction",
+    "migration_opening_balance",
+]
+
+
+class WalletEntryCreate(BaseModel):
+    entry_type: WALLET_ENTRY_TYPES
+    amount: float
+    source_type: str
+    source_id: Optional[int] = None
+    operation_id: str
+    reason: Optional[str] = None
+    metadata: Optional[dict] = None
+    actor: Optional[str] = None
+    device_id: Optional[str] = None
+
+
+class WalletEntryOut(BaseModel):
+    id: int
+    student_id: int
+    entry_type: str
+    amount: float
+    direction: str
+    source_type: Optional[str] = None
+    source_id: Optional[int] = None
+    operation_id: str
+    balance_before: float
+    balance_after: float
+    created_at: datetime
+    created_by: Optional[str] = None
+    device_id: Optional[str] = None
+    reversal_of_entry_id: Optional[int] = None
+    metadata_json: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WalletBalanceOut(BaseModel):
+    student_id: int
+    balance: float
+
+
+class WalletReconciliationOut(BaseModel):
+    student_id: int
+    derived_balance: float
+    cached_balance: float
+    matches: bool
+
+
+class WalletMigrationRequest(BaseModel):
+    migration_run_id: str
+    reason: Optional[str] = None
+    actor: Optional[str] = None
+    dry_run: bool = False
+
+
+class WalletMigrationResult(BaseModel):
+    migration_run_id: str
+    dry_run: bool
+    processed_count: int
+    skipped_count: int
+    entries: List[dict]
+
+
 class TransactionItemCreate(BaseModel):
     book_id: int
     quantity: int
@@ -215,6 +287,150 @@ class FinanceReportOut(BaseModel):
     withdrawals: float
     safe_balance: float
     supplier_due: float
+
+
+class JournalLineOut(BaseModel):
+    account_code: str
+    account_name: str
+    line_type: str
+    amount: float
+    memo: Optional[str] = None
+
+
+class JournalEntryOut(BaseModel):
+    id: int
+    entry_number: str
+    source_type: Optional[str] = None
+    source_id: Optional[int] = None
+    description: str
+    reason: Optional[str] = None
+    staff_name: str
+    status: str
+    period_key: str
+    event_timestamp: datetime
+    posted_at: datetime
+    is_reversal: bool
+    lines: List[JournalLineOut]
+
+
+class TrialBalanceLineOut(BaseModel):
+    account_code: str
+    account_name: str
+    account_type: str
+    debits: float
+    credits: float
+    net_balance: float
+
+
+class FinancialAuditTrailOut(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: Optional[int] = None
+    action: str
+    staff_name: str
+    reason: Optional[str] = None
+    previous_value: Optional[str] = None
+    new_value: Optional[str] = None
+    originating_transaction_type: Optional[str] = None
+    originating_transaction_id: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReconciliationRunCreate(BaseModel):
+    reconciliation_type: Literal["daily", "monthly"]
+    period_key: str
+    starts_at: datetime
+    ends_at: datetime
+    counted_cash: Optional[float] = None
+    staff_name: str
+    supervisor_name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ReconciliationRunOut(BaseModel):
+    id: int
+    reconciliation_type: str
+    period_key: str
+    starts_at: datetime
+    ends_at: datetime
+    expected_cash: float
+    counted_cash: Optional[float] = None
+    variance_amount: float
+    exception_count: int
+    status: str
+    staff_name: str
+    supervisor_name: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CashDrawerSessionCreate(BaseModel):
+    staff_name: str
+    opening_balance: float = 0.0
+    notes: Optional[str] = None
+
+
+class CashDrawerSessionClose(BaseModel):
+    counted_cash: float
+    supervisor_name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CashDrawerSessionOut(BaseModel):
+    id: int
+    staff_name: str
+    opening_balance: float
+    expected_cash: Optional[float] = None
+    counted_cash: Optional[float] = None
+    variance_amount: Optional[float] = None
+    status: str
+    supervisor_name: Optional[str] = None
+    notes: Optional[str] = None
+    opened_at: datetime
+    closed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FinancialValidationOut(BaseModel):
+    balanced_journal_entries: bool
+    unbalanced_entry_ids: List[int]
+    orphan_safe_transaction_ids: List[int]
+    open_cash_drawer_count: int
+    current_cash_balance: float
+
+
+class FinancialSummaryOut(BaseModel):
+    period_key: str
+    revenue: float
+    sales_returns: float
+    cogs: float
+    gross_profit: float
+    cash_balance: float
+    accounts_payable: float
+
+
+class FinancialPeriodClose(BaseModel):
+    closed_by: str
+    notes: Optional[str] = None
+
+
+class FinancialPeriodOut(BaseModel):
+    id: int
+    period_key: str
+    period_type: str
+    starts_at: datetime
+    ends_at: datetime
+    status: str
+    closed_at: Optional[datetime] = None
+    closed_by: Optional[str] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BookStatsOut(BaseModel):

@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: educon_pos
+      POSTGRES_USER: educon_pos
+      POSTGRES_PASSWORD: educon_pos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U educon_pos -d educon_pos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql://educon_pos:educon_pos@postgres:5432/educon_pos
+      JWT_SECRET_KEY: local-dev-secret-change-me
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:8080
+      ENFORCE_SCHEMA_VERSION: "true"
+      TRUSTED_HOSTS: localhost,127.0.0.1
+      INIT_ADMIN_USERNAME: admin
+      INIT_ADMIN_PASSWORD: admin12345
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python -m scripts.run_migrations &&
+             python -m scripts.start_backend"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:

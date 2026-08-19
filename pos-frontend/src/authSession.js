@@ -68,9 +68,14 @@ const parseErrorDetail = async (response) => {
   }
 }
 
+const createRequestId = (syncMeta) => {
+  if (syncMeta?.operationId) return `${syncMeta.operationId}:${Date.now()}`
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export const login = async (apiBaseUrl, username, password) => {
   const startedAt = performance.now()
-  trackAuthEvent('login_started', { context: { username } })
+  trackAuthEvent('login_started')
   const response = await fetch(`${apiBaseUrl}/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -116,6 +121,7 @@ export const logout = async (apiBaseUrl) => {
     // Best effort logout. Local auth is still cleared.
   } finally {
     clearAuthState()
+    if (typeof sessionStorage !== 'undefined') sessionStorage.clear()
   }
 }
 
@@ -164,9 +170,16 @@ export const ensureValidAuth = async (apiBaseUrl) => {
 export const authorizedApiRequest = async (apiBaseUrl, path, options) => {
   const startedAt = performance.now()
   const method = String(options?.method || 'GET').toUpperCase()
+  const syncMeta = options?.syncMeta || null
   let authState = await ensureValidAuth(apiBaseUrl)
   const headers = { 'content-type': 'application/json', ...(options?.headers || {}) }
   headers.Authorization = `Bearer ${authState.accessToken}`
+  headers['x-request-id'] = headers['x-request-id'] || createRequestId(syncMeta)
+  headers['x-client-request-source'] = headers['x-client-request-source'] || (syncMeta ? 'offline-sync' : 'frontend')
+  if (syncMeta?.operationType) headers['x-sync-operation'] = syncMeta.operationType
+  if (syncMeta?.operationId) headers['x-sync-operation-id'] = syncMeta.operationId
+  if (syncMeta?.fingerprint) headers['x-sync-fingerprint'] = syncMeta.fingerprint
+  if (syncMeta?.replayToken) headers['x-sync-replay-token'] = syncMeta.replayToken
   let authRetry = false
   let response
   try {

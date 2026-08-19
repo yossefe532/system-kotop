@@ -1,0 +1,32 @@
+import {
+  BookOpen,
+  Users,
+  ShoppingCart,
+  ReceiptText,
+  BarChart3,
+  PackageCheck,
+  PackageX,
+  ArrowUpDown,
+  Printer,
+  ShieldAlert,
+  ClipboardList,
+  ShieldCheck,
+  FileSpreadsheet,
+} from 'lucide-react'
+
+export const navItems = [
+  { id: 'pos', icon: ShoppingCart },
+  { id: 'books', icon: BookOpen },
+  { id: 'booksInsights', icon: BarChart3 },
+  { id: 'students', icon: Users },
+  { id: 'pickupReservation', icon: PackageCheck },
+  { id: 'cancelReservation', icon: PackageX },
+  { id: 'returns', icon: ArrowUpDown },
+  { id: 'receipt', icon: ReceiptText },
+  { id: 'receiptArchive', icon: Printer },
+  { id: 'emergency', icon: ShieldAlert },
+  { id: 'inventory', icon: ClipboardList },
+  { id: 'admin', icon: ShieldCheck },
+  { id: 'accounting', icon: FileSpreadsheet },
+  { id: 'reports', icon: BarChart3 },
+]

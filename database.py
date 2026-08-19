@@ -2,9 +2,12 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.db.observability import install_database_observability
+from app.core.runtime import current_app_env, is_protected_env
 
-if os.getenv("RAILWAY_ENVIRONMENT") and not os.getenv("DATABASE_URL"):
-    raise RuntimeError("DATABASE_URL is required on Railway")
+APP_ENV = current_app_env()
+
+if is_protected_env(APP_ENV) and not os.getenv("DATABASE_URL"):
+    raise RuntimeError("DATABASE_URL is required in staging and production")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
 if DATABASE_URL.startswith("postgres://"):

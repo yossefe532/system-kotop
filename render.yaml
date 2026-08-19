@@ -4,14 +4,28 @@ services:
     runtime: python
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    preDeployCommand: python -m scripts.run_migrations
+    startCommand: python -m scripts.start_backend
+    healthCheckPath: /health/ready
     envVars:
+      - key: APP_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: educon-pos-db
           property: connectionString
       - key: PYTHON_VERSION
         value: 3.11.10
+      - key: ENFORCE_SCHEMA_VERSION
+        value: "true"
+      - key: ALLOW_BOOTSTRAP_ADMIN_FALLBACK
+        value: "false"
+      - key: WALLET_LEDGER_ENABLED
+        value: "false"
+      - key: INIT_ADMIN_USERNAME
+        value: replace-with-initial-admin-username
+      - key: INIT_ADMIN_PASSWORD
+        value: replace-with-a-strong-admin-password
 
   - type: static
     name: educon-pos-web
@@ -19,8 +33,14 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
+      - key: APP_ENV
+        value: production
       - key: VITE_API_BASE_URL
         value: https://educon-pos-api.onrender.com
+      - key: VITE_WALLET_LEDGER_ENABLED
+        value: "false"
+      - key: VITE_ENABLE_DEMO_SEED
+        value: "false"
     routes:
       - type: rewrite
         source: /*

@@ -1,6 +1,9 @@
 import os
 from dataclasses import dataclass
 
+from app.core.runtime import current_app_env, is_protected_env
+from app.core.security import get_security_config
+
 
 def _as_int(name: str, default: int) -> int:
     raw = os.getenv(name, str(default)).strip()
@@ -25,8 +28,9 @@ class AuthConfig:
 
 
 def get_auth_config() -> AuthConfig:
-    app_env = os.getenv("APP_ENV", "").strip().lower()
-    is_prod = bool(os.getenv("RAILWAY_ENVIRONMENT")) or app_env in {"production", "prod"}
+    app_env = current_app_env()
+    is_prod = is_protected_env(app_env)
+    security_config = get_security_config()
     secret = os.getenv("JWT_SECRET_KEY", "").strip()
     if not secret and is_prod:
         raise RuntimeError("JWT_SECRET_KEY is required in production")
@@ -42,6 +46,23 @@ def get_auth_config() -> AuthConfig:
             "http://127.0.0.1:5173",
         ]
 
+    if is_prod and secret == "dev-only-change-me":
+        raise RuntimeError("Refusing to start with development JWT secret in a protected environment")
+    if is_prod and not allowed:
+        raise RuntimeError("CORS_ALLOWED_ORIGINS is required in a protected environment")
+    if is_prod:
+        init_username = os.getenv("INIT_ADMIN_USERNAME", "").strip()
+        init_password = os.getenv("INIT_ADMIN_PASSWORD", "").strip()
+        if not init_username or not init_password:
+            raise RuntimeError(
+                "INIT_ADMIN_USERNAME and INIT_ADMIN_PASSWORD are required in staging and production"
+            )
+        fallback_raw = os.getenv("ALLOW_BOOTSTRAP_ADMIN_FALLBACK", "").strip().lower()
+        if fallback_raw in {"1", "true", "yes", "on"}:
+            raise RuntimeError(
+                "ALLOW_BOOTSTRAP_ADMIN_FALLBACK must be false in staging and production"
+            )
+
     return AuthConfig(
         secret_key=secret,
         algorithm=os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256",
@@ -54,4 +75,3 @@ def get_auth_config() -> AuthConfig:
         init_admin_password=os.getenv("INIT_ADMIN_PASSWORD", "").strip() or None,
         init_admin_full_name=os.getenv("INIT_ADMIN_FULL_NAME", "System Administrator").strip(),
     )
-

@@ -1,4 +1,3 @@
-"""Canonical DB exports."""
+"""DB package namespace."""
 
-from app.db.session import Base, DATABASE_URL, SessionLocal, engine
-
+__all__ = []

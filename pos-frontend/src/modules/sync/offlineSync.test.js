@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { classifyReplayError } from './conflictResolver'
 import { dedupeQueue, createQueueOperation } from './queueManager'
 import { getRetryDelayMs } from './retryPolicy'
-import { acquireReplayLock } from './syncLocks'
+import { createReplayLockController } from './syncLocks'
 
 const createMemoryStorage = () => {
   const data = new Map()
@@ -21,12 +21,25 @@ describe('offline sync helpers', () => {
 
   it('dedupes queue by dedupe key while preserving order', () => {
     const one = createQueueOperation({ type: 'book_upsert', dedupeKey: 'book:1', localId: 1 })
-    const two = createQueueOperation({ type: 'book_upsert', dedupeKey: 'book:1', localId: 1 })
+    const two = createQueueOperation({ type: 'book_upsert', dedupeKey: 'book:1', localId: 1, payload: { title: 'Latest' } })
     const three = createQueueOperation({ type: 'student_upsert', dedupeKey: 'student:1', localId: 1 })
     const queue = dedupeQueue([one, two, three])
     expect(queue).toHaveLength(2)
-    expect(queue[0].dedupeKey).toBe('book:1')
+    expect(queue[0].payload.title).toBe('Latest')
     expect(queue[1].dedupeKey).toBe('student:1')
+  })
+
+  it('assigns dependencies for operations that rely on earlier offline entities', () => {
+    const student = createQueueOperation({ type: 'student_upsert', mode: 'add', localId: 11 })
+    const reservation = createQueueOperation(
+      {
+        type: 'reservation_create',
+        localReservationId: 'r1',
+        payload: { studentId: 11, bookId: 21, qty: 1, deposit: 5, staffName: 'Heba' },
+      },
+      [student, createQueueOperation({ type: 'book_upsert', mode: 'add', localId: 21 })],
+    )
+    expect(reservation.dependencies.length).toBeGreaterThan(0)
   })
 
   it('uses exponential retry delay with cap', () => {
@@ -42,14 +55,18 @@ describe('offline sync helpers', () => {
     const quarantine = classifyReplayError({ error: { status: 409 }, isAuthError: () => false })
     expect(auth.action).toBe('auth_expired')
     expect(retry.action).toBe('retry')
+    expect(retry.category).toBe('server')
     expect(quarantine.action).toBe('quarantine')
   })
 
-  it('prevents duplicate replay ownership lock', () => {
-    const first = acquireReplayLock({ ttlMs: 5000 })
-    const second = acquireReplayLock({ ttlMs: 5000 })
+  it('prevents different tabs from owning the replay lock simultaneously', () => {
+    const storage = createMemoryStorage()
+    const firstController = createReplayLockController({ storage, ownerId: 'tab-a' })
+    const secondController = createReplayLockController({ storage, ownerId: 'tab-b' })
+    const first = firstController.acquire({ ttlMs: 5000 })
+    const second = secondController.acquire({ ttlMs: 5000 })
     expect(first.acquired).toBe(true)
-    expect(second.acquired).toBe(true)
+    expect(second.acquired).toBe(false)
     first.release()
   })
 })

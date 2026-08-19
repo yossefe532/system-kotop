@@ -6,20 +6,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
 from app.core.observability import observe_auth_event, set_request_context
+from app.api.deps import get_db
 from auth.security import AuthTokenError, decode_token
 from models import User
-from database import SessionLocal
 
 bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger("auth")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _user_roles(user: User) -> set[str]:

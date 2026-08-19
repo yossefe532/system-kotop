@@ -1,32 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  BookOpen,
-  Users,
-  ShoppingCart,
   ReceiptText,
-  BarChart3,
   ScanBarcode,
   Plus,
   Pencil,
-  CheckCircle2,
-  X,
   Globe,
-  ShieldAlert,
-  ClipboardList,
-  ShieldCheck,
   Lock,
-  FileSpreadsheet,
   Printer,
-  Search,
-  ArrowUpDown,
-  PackageCheck,
-  PackageX,
   Moon,
   Sun,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import * as XLSX from 'xlsx'
 import { validateBookDraft } from './posLogic'
+import { isWalletLedgerEnabled } from './config/app'
+import { walletMutationOperation } from './modules/wallet/walletSyncPayloads'
 import LoginPage from './LoginPage'
 import { createApiRequest } from './services/apiClient'
 import { hydrateCoreData, fetchBooksInsights, fetchCoreSnapshot } from './modules/catalog/coreDataService'
@@ -39,404 +27,66 @@ import { enqueueOperation, persistQueueState } from './modules/sync/queueManager
 import { runReplayCycle } from './modules/sync/replayManager'
 import { createReconnectManager } from './modules/sync/reconnectManager'
 import {
+  clearOfflineStorage,
   loadOfflineBootstrap,
   setIdMappings,
   setOfflineSnapshot,
 } from './modules/sync/indexedDb'
 import { archiveReceiptPayload, refreshReceiptArchiveItems } from './modules/receipt/receiptArchiveService'
 import { createSupplyRecord, refreshAccountingSnapshot } from './modules/accounting/accountingService'
+import { createCheckoutController } from './modules/checkout/checkoutController'
+import { isStudentDuplicate } from './modules/students/studentService'
 import {
-  AuthSessionError,
   clearAuthState,
   currentAuthUser,
   loadAuthState,
   login,
   logout,
 } from './authSession'
+import { apiBaseUrl, auditStaffMembers, initialBooks, initialStudents, staffMembers } from './config/app'
+import { rolePriority, viewAccessLevel } from './config/access'
+import { navItems } from './config/navigation'
+import { defaultChannelLink, defaultWhatsappGroupLinks } from './config/whatsapp'
+import { cartKey, getDefaultReservationDeposit } from './lib/cart'
+import { isAuthError } from './lib/errors'
+import { formatCurrency, formatPhoneForWhatsApp } from './lib/format'
+import {
+  mapApiBookToUi,
+  mapApiStudentToUi,
+  mapUiBookToApi,
+  mapUiStudentToApi,
+} from './lib/mappers'
+import { buildReceiptText, paymentMethodLabels, receiptTypeLabels } from './lib/receipt'
+import { readStoredSnapshot } from './lib/storage'
+import Modal from './components/ui/Modal'
+import ModalHeader from './components/ui/ModalHeader'
+import ModalActions from './components/ui/ModalActions'
+import InputField from './components/ui/InputField'
+import SelectField from './components/ui/SelectField'
+import MetricBar from './components/ui/MetricBar'
+import ThermalReceipt from './components/ui/ThermalReceipt'
+import BooksView from './features/books/BooksView'
+import BooksInsightsView from './features/books/BooksInsightsView'
+import StudentsView from './features/students/StudentsView'
+import ReportsView from './features/reports/ReportsView'
+import EmergencyView from './features/emergency/EmergencyView'
+import AdminView from './features/admin/AdminView'
+import AccountingView from './features/accounting/AccountingView'
+import ReceiptArchiveView from './features/receipts/ReceiptArchiveView'
+import InventoryAuditView from './features/inventory/InventoryAuditView'
+import POSView from './features/pos/POSView'
+import ReservationsView from './features/reservations/ReservationsView'
+import PickupReservationContent from './features/reservations/PickupReservationContent'
+import CancelReservationContent from './features/reservations/CancelReservationContent'
+import LegacyReservationModal from './features/reservations/LegacyReservationModal'
+import ReturnsView from './features/returns/ReturnsView'
+import ReturnSaleContent from './features/returns/ReturnSaleContent'
+import useModal from './hooks/useModal'
+import useViewData from './hooks/useViewData'
+import useOfflineSnapshot from './hooks/useOfflineSnapshot'
+import useStudentSearch from './hooks/useStudentSearch'
+import useCart from './hooks/useCart'
 
-const logoUrl = 'https://i.postimg.cc/hPWCrLY4/educon_logo_high_quality_png_white.png'
-
-const initialBooks = [
-  {
-    id: 1,
-    title: 'Arabic for Beginners',
-    author: 'Salma Hassan',
-    sellingPrice: 120,
-    costPrice: 70,
-    stock: 32,
-    barcode: '978001',
-    isArriving: false,
-  },
-  {
-    id: 2,
-    title: 'Math Sparks 1',
-    author: 'Omar Nasser',
-    sellingPrice: 95,
-    costPrice: 55,
-    stock: 24,
-    barcode: '978002',
-    isArriving: false,
-  },
-  {
-    id: 3,
-    title: 'Science Lab Notes',
-    author: 'Dina Fathy',
-    sellingPrice: 150,
-    costPrice: 85,
-    stock: 18,
-    barcode: '978003',
-    isArriving: true,
-  },
-  {
-    id: 4,
-    title: 'English Reader Level 2',
-    author: 'Layla Sadek',
-    sellingPrice: 110,
-    costPrice: 60,
-    stock: 28,
-    barcode: '978004',
-    isArriving: false,
-  },
-  {
-    id: 5,
-    title: 'Coding for Kids',
-    author: 'Kareem Adel',
-    sellingPrice: 180,
-    costPrice: 95,
-    stock: 12,
-    barcode: '978005',
-    isArriving: false,
-  },
-]
-
-const initialStudents = [
-  {
-    id: 1,
-    name: 'Maha El-Sayed',
-    stage: 'third',
-    gender: 'female',
-    system: 'general',
-    specialty: 'Science',
-    phone: '+20 10 1234 5678',
-  },
-  {
-    id: 2,
-    name: 'Yousef Khaled',
-    stage: 'second',
-    gender: 'male',
-    system: 'azhar',
-    specialty: 'Literature',
-    phone: '+20 12 2222 3344',
-  },
-  {
-    id: 3,
-    name: 'Amina Mostafa',
-    stage: 'first',
-    gender: 'female',
-    system: 'general',
-    specialty: 'Science',
-    phone: '+20 11 4455 6677',
-  },
-]
-
-const staffMembers = [
-  { id: 'youssef' },
-  { id: 'suad' },
-  { id: 'maryam' },
-]
-
-const auditStaffMembers = [
-  { id: 'heba' },
-  { id: 'maryam' },
-]
-
-const navItems = [
-  { id: 'pos', icon: ShoppingCart },
-  { id: 'books', icon: BookOpen },
-  { id: 'booksInsights', icon: BarChart3 },
-  { id: 'students', icon: Users },
-  { id: 'pickupReservation', icon: PackageCheck },
-  { id: 'cancelReservation', icon: PackageX },
-  { id: 'returns', icon: ArrowUpDown },
-  { id: 'receipt', icon: ReceiptText },
-  { id: 'receiptArchive', icon: Printer },
-  { id: 'emergency', icon: ShieldAlert },
-  { id: 'inventory', icon: ClipboardList },
-  { id: 'admin', icon: ShieldCheck },
-  { id: 'accounting', icon: FileSpreadsheet },
-  { id: 'reports', icon: BarChart3 },
-]
-
-const rolePriority = { viewer: 1, cashier: 2, manager: 3, admin: 4 }
-const viewAccessLevel = {
-  pos: 'cashier',
-  books: 'manager',
-  booksInsights: 'manager',
-  students: 'cashier',
-  pickupReservation: 'cashier',
-  cancelReservation: 'cashier',
-  returns: 'cashier',
-  receipt: 'cashier',
-  receiptArchive: 'manager',
-  emergency: 'manager',
-  inventory: 'manager',
-  admin: 'admin',
-  accounting: 'manager',
-  reports: 'manager',
-}
-
-const defaultWhatsappGroupLinks = {
-  general: {
-    male: {
-      first: 'https://chat.whatsapp.com/CRWmWxM7WY00Wuo8Yi5TpD?mode=gi_t',
-      second: 'https://chat.whatsapp.com/KUZ1x8vNs7W5IJvg2O5e2Q?mode=gi_t',
-      third: 'https://chat.whatsapp.com/JkDFCkXoWlrLMTqkNPC6OE?mode=gi_t',
-    },
-    female: {
-      first: 'https://chat.whatsapp.com/LlBiHxx4iEhDdSVzYZwgLx?mode=gi_t',
-      second: 'https://chat.whatsapp.com/J1WGjEM7icVE1ccuKHd3hm?mode=gi_t',
-      third: 'https://chat.whatsapp.com/J1WGjEM7icVE1ccuKHd3hm?mode=gi_t',
-    },
-  },
-  azhar: {
-    male: {
-      first: 'https://chat.whatsapp.com/CRWmWxM7WY00Wuo8Yi5TpD?mode=gi_t',
-      second: 'https://chat.whatsapp.com/KUZ1x8vNs7W5IJvg2O5e2Q?mode=gi_t',
-      third: 'https://chat.whatsapp.com/IArhfylW8BMD5gV5plOO5s?mode=gi_t',
-    },
-    female: {
-      first: 'https://chat.whatsapp.com/LlBiHxx4iEhDdSVzYZwgLx?mode=gi_t',
-      second: 'https://chat.whatsapp.com/J1WGjEM7icVE1ccuKHd3hm?mode=gi_t',
-      third: 'https://chat.whatsapp.com/IArhfylW8BMD5gV5plOO5s?mode=gi_t',
-    },
-  },
-}
-
-const defaultChannelLink = 'https://whatsapp.com/channel/0029Vb6OHma0rGiTqALr1019'
-
-const formatCurrency = (locale, value) =>
-  new Intl.NumberFormat(locale, {
-    style: 'currency',
-    currency: 'EGP',
-    maximumFractionDigits: 0,
-  }).format(value)
-
-const clampDeposit = (value) => {
-  const numeric = Number(value)
-  if (Number.isNaN(numeric)) return 0
-  return Math.max(numeric, 0)
-}
-
-const SEP = '━━━━━━━━━━━━━━━━'
-const SEP2 = '────────────────'
-
-const receiptTypeLabels = { sale: 'بيع', reservation: 'حجز', sale_reservation: 'بيع وحجز', pickup: 'استلام حجز', cancel: 'سحب حجز', return: 'مرتجع' }
-
-const paymentMethodLabels = { cash: 'كاش', wallet: 'فودافون كاش', bank: 'تحويل بنكي', mixed: 'مختلط' }
-
-const buildReceiptText = ({
-  academyName,
-  studentName,
-  staffName,
-  items,
-  subtotal,
-  discount,
-  total,
-  transactionId,
-  transactionDate,
-  isArabic,
-  formatCurrencyFn,
-  receiptType = 'sale',
-  customFooter = '',
-}) => {
-  const typeLabel = receiptTypeLabels[receiptType] || receiptType
-  if (isArabic) {
-    const lines = [
-      `📚 ${academyName}`,
-      SEP,
-      `نوع العملية: ${typeLabel}`,
-      `رقم العملية: ${transactionId}`,
-      `التاريخ: ${transactionDate}`,
-      `الموظف: ${staffName}`,
-      studentName ? `الطالب: ${studentName}` : null,
-    ].filter(Boolean)
-    lines.push(SEP2)
-    items.forEach((item) => {
-      const typeLabel = item.type === 'reservation' ? ' (حجز)' : ''
-      lines.push(`• ${item.title} × ${item.qty}${typeLabel}`)
-      lines.push(`  ${formatCurrencyFn(item.lineTotal)}`)
-    })
-    lines.push(SEP2)
-    lines.push(`الإجمالي قبل الخصم: ${formatCurrencyFn(subtotal)}`)
-    lines.push(`الخصم: ${formatCurrencyFn(discount)}`)
-    lines.push(`الإجمالي النهائي: ${formatCurrencyFn(total)}`)
-    lines.push(SEP)
-    lines.push('شكراً لزيارتكم! 🙏')
-    if (customFooter?.trim()) lines.push(SEP2, customFooter.trim())
-    return lines.join('\n')
-  }
-  const lines = [academyName, '---']
-  lines.push(`Transaction: ${transactionId}`)
-  lines.push(`Date: ${transactionDate}`)
-  lines.push(`Staff: ${staffName}`)
-  if (studentName) lines.push(`Student: ${studentName}`)
-  items.forEach((item) => {
-    lines.push(`${item.title} x${item.qty} = ${item.lineTotal}`)
-  })
-  lines.push(`Subtotal: ${subtotal}`)
-  lines.push(`Discount: ${discount}`)
-  lines.push(`Total: ${total}`)
-  lines.push('---')
-  lines.push('Thank you!')
-  if (customFooter?.trim()) lines.push('---', customFooter.trim())
-  return lines.join('\n')
-}
-
-const LEGACY_STORAGE_KEY = 'educon-pos-state-v1'
-
-const readStoredSnapshot = () => {
-  if (typeof localStorage === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
-    if (!raw) return null
-    const data = JSON.parse(raw)
-    if (!data || typeof data !== 'object') return null
-    return data
-  } catch {
-    return null
-  }
-}
-
-const apiBaseUrl = (() => {
-  const raw = import.meta.env.VITE_API_BASE_URL
-  if (import.meta.env.PROD && !(typeof raw === 'string' && raw.trim())) {
-    throw new Error('VITE_API_BASE_URL is required in production')
-  }
-  if (typeof raw === 'string' && raw.trim()) return raw.trim().replace(/\/+$/, '')
-  return 'http://localhost:8000'
-})()
-
-const isAuthError = (error) => error instanceof AuthSessionError || Boolean(error?.authExpired)
-
-const gradeFromStage = (stage) => {
-  if (stage === 'first') return '1st Sec'
-  if (stage === 'second') return '2nd Sec'
-  if (stage === 'third') return '3rd Sec'
-  return null
-}
-
-const stageFromGrade = (grade) => {
-  if (grade === '1st Sec') return 'first'
-  if (grade === '2nd Sec') return 'second'
-  if (grade === '3rd Sec') return 'third'
-  return 'first'
-}
-
-const systemToApi = (system) => {
-  if (system === 'general') return 'General'
-  if (system === 'azhar') return 'Azhar'
-  return null
-}
-
-const systemFromApi = (system) => {
-  if (system === 'General') return 'general'
-  if (system === 'Azhar') return 'azhar'
-  return 'general'
-}
-
-const specialtyToApi = (specialty) => {
-  if (!specialty) return null
-  if (specialty === 'Scientific') return 'Scientific'
-  if (specialty === 'Math') return 'Math'
-  if (specialty === 'Literary') return 'Literary'
-  if (specialty === 'Science') return 'Scientific'
-  if (specialty === 'Literature') return 'Literary'
-  return null
-}
-
-const specialtyFromApi = (specialty) => {
-  if (specialty === 'Scientific') return 'Science'
-  if (specialty === 'Math') return 'Math'
-  if (specialty === 'Literary') return 'Literature'
-  return ''
-}
-
-const mapApiBookToUi = (book) => {
-  return {
-    id: book.id,
-    title: book.title,
-    author: book.author,
-    sellingPrice: book.selling_price,
-    costPrice: book.cost_price,
-    estimatedCostPrice: book.estimated_cost_price,
-    stock: book.total_stock,
-    reservedStock: book.reserved_stock,
-    barcode: book.isbn_barcode || '',
-    isArriving: Boolean(book.is_arriving),
-    estimatedSellingPrice: book.estimated_selling_price,
-  }
-}
-
-const mapUiBookToApi = (book) => {
-  return {
-    title: book.title,
-    author: book.author,
-    isbn_barcode: book.barcode ? String(book.barcode) : null,
-    cost_price: Number(book.costPrice) || 0,
-    selling_price: Number(book.sellingPrice) || 0,
-    estimated_cost_price: book.estimatedCostPrice === '' || book.estimatedCostPrice == null ? null : Number(book.estimatedCostPrice),
-    estimated_selling_price: book.estimatedSellingPrice === '' || book.estimatedSellingPrice == null ? null : Number(book.estimatedSellingPrice),
-    total_stock: Number(book.stock) || 0,
-    reserved_stock: Number(book.reservedStock) || 0,
-    is_arriving: Boolean(book.isArriving),
-  }
-}
-
-const mapApiStudentToUi = (student) => {
-  return {
-    id: student.id,
-    name: student.name,
-    phone: student.phone || '',
-    stage: stageFromGrade(student.grade),
-    gender: student.gender || 'male',
-    system: systemFromApi(student.system),
-    specialty: specialtyFromApi(student.specialty),
-    balance: Number(student.balance) || 0,
-  }
-}
-
-const mapUiStudentToApi = (student) => {
-  const grade = gradeFromStage(student.stage)
-  const system = systemToApi(student.system)
-  let specialty = specialtyToApi(student.specialty)
-  if (grade === '3rd Sec' && !specialty) specialty = 'Scientific'
-  return {
-    name: student.name,
-    phone: student.phone || null,
-    gender: student.gender || null,
-    grade,
-    system,
-    specialty,
-    balance: Number(student.balance) || 0,
-  }
-}
-
-const formatPhoneForWhatsApp = (phone) => {
-  if (!phone || typeof phone !== 'string') return null
-  const digits = phone.replace(/\D/g, '')
-  if (digits.length < 10) return null
-  if (digits.startsWith('20') && digits.length >= 12) return digits.slice(0, 12)
-  if (digits.startsWith('0') && digits.length >= 10) return '20' + digits.slice(1)
-  if (digits.length >= 10) return digits.length === 10 ? '20' + digits : digits
-  return null
-}
-
-const cartKey = (bookId, type) => `${type}:${bookId}`
-const getDefaultReservationDeposit = (book) => {
-  const price = Number(book?.sellingPrice) || 0
-  if (price <= 0) return 0
-  return Math.max(Math.round(price * 0.3), 20)
-}
 
 function App() {
   const { t, i18n } = useTranslation()
@@ -467,7 +117,7 @@ function App() {
   const [students, setStudents] = useState(() =>
     Array.isArray(storedSnapshot?.students) ? storedSnapshot.students : initialStudents,
   )
-  const [cartItems, setCartItems] = useState(() => {
+  const initialCartItems = useMemo(() => {
     if (!Array.isArray(storedSnapshot?.cartItems)) return []
     const raw = storedSnapshot.cartItems
     if (raw.length === 0) return []
@@ -488,7 +138,8 @@ function App() {
         }
       })
       .filter(Boolean)
-  })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [searchTerm, setSearchTerm] = useState(() =>
     typeof storedSnapshot?.searchTerm === 'string' ? storedSnapshot.searchTerm : '',
   )
@@ -499,9 +150,20 @@ function App() {
   const [discount, setDiscount] = useState(() =>
     typeof storedSnapshot?.discount === 'number' ? storedSnapshot.discount : 0,
   )
-  const [bookModal, setBookModal] = useState({ open: false, mode: 'add', data: null })
-  const [studentModal, setStudentModal] = useState({ open: false, mode: 'add', data: null })
-  const [barcodeModal, setBarcodeModal] = useState({ open: false, book: null })
+  const {
+    cartItems,
+    setCartItems,
+    cartDetails,
+    reservationOutstandingTotal,
+    addCartLine,
+    updateCartQty,
+    updateCartType,
+    updateCartDeposit,
+    clearCart,
+  } = useCart({ books, discount, initialCartItems })
+  const [bookModal, bookModalHelpers] = useModal({ open: false, mode: 'add', data: null })
+  const [studentModal, studentModalHelpers] = useModal({ open: false, mode: 'add', data: null })
+  const [barcodeModal, barcodeModalHelpers] = useModal({ open: false, book: null })
   const [selectedStaffId, setSelectedStaffId] = useState(() =>
     typeof storedSnapshot?.selectedStaffId === 'string' ? storedSnapshot.selectedStaffId : 'youssef',
   )
@@ -571,8 +233,8 @@ function App() {
   const [auditActualCash, setAuditActualCash] = useState(() =>
     typeof storedSnapshot?.auditActualCash === 'string' ? storedSnapshot.auditActualCash : '',
   )
-  const [legacyReservationModal, setLegacyReservationModal] = useState({ open: false })
-  const [studentDetailsModal, setStudentDetailsModal] = useState({ open: false, student: null })
+  const [legacyReservationModal, legacyReservationModalHelpers] = useModal({ open: false })
+  const [studentDetailsModal, studentDetailsModalHelpers] = useModal({ open: false, student: null })
   const [paidAmount, setPaidAmount] = useState('')
   const [walletLog, setWalletLog] = useState(() =>
     Array.isArray(storedSnapshot?.walletLog) ? storedSnapshot.walletLog : [],
@@ -596,59 +258,125 @@ function App() {
   const locale = isRtl ? 'ar-EG' : 'en-US'
   const apiRequest = useMemo(() => createApiRequest(apiBaseUrl), [])
 
-  useEffect(() => {
-    let cancelled = false
-    const hydrateOfflineState = async () => {
-      try {
-        const { snapshot, queue, mappings, receiptArchive } = await loadOfflineBootstrap()
-        if (cancelled) return
-        if (snapshot && typeof snapshot === 'object') {
-          if (typeof snapshot.useBackend === 'boolean') setUseBackend(snapshot.useBackend)
-          if (typeof snapshot.activeView === 'string') setActiveView(snapshot.activeView)
-          if (Array.isArray(snapshot.books)) setBooks(snapshot.books)
-          if (Array.isArray(snapshot.students)) setStudents(snapshot.students)
-          if (Array.isArray(snapshot.cartItems)) setCartItems(snapshot.cartItems)
-          if (typeof snapshot.searchTerm === 'string') setSearchTerm(snapshot.searchTerm)
-          if (typeof snapshot.selectedStudentId === 'string') setSelectedStudentId(snapshot.selectedStudentId)
-          if (typeof snapshot.discount === 'number') setDiscount(snapshot.discount)
-          if (Array.isArray(snapshot.pendingReservations)) setPendingReservations(snapshot.pendingReservations)
-          if (Array.isArray(snapshot.salesHistory)) setSalesHistory(snapshot.salesHistory)
-          if (Array.isArray(snapshot.withdrawals)) setWithdrawals(snapshot.withdrawals)
-          if (Array.isArray(snapshot.auditLog)) setAuditLog(snapshot.auditLog)
-          if (typeof snapshot.adminUnlocked === 'boolean') setAdminUnlocked(snapshot.adminUnlocked)
-          if (typeof snapshot.transactionCounter === 'number') setTransactionCounter(snapshot.transactionCounter)
-          if (snapshot.lastTransaction !== undefined) setLastTransaction(snapshot.lastTransaction)
-          if (snapshot.quickStudent && typeof snapshot.quickStudent === 'object') setQuickStudent(snapshot.quickStudent)
-          if (snapshot.emergencyForm && typeof snapshot.emergencyForm === 'object') setEmergencyForm(snapshot.emergencyForm)
-          if (typeof snapshot.auditStaffId === 'string') setAuditStaffId(snapshot.auditStaffId)
-          if (Array.isArray(snapshot.cancelledReservations)) setCancelledReservations(snapshot.cancelledReservations)
-          if (typeof snapshot.selectedStaffId === 'string') setSelectedStaffId(snapshot.selectedStaffId)
-          if (typeof snapshot.isDarkMode === 'boolean') setIsDarkMode(snapshot.isDarkMode)
-          if (typeof snapshot.followsUs === 'boolean') setFollowsUs(snapshot.followsUs)
-          if (typeof snapshot.adminCustomFooter === 'string') setAdminCustomFooter(snapshot.adminCustomFooter)
-          if (snapshot.adminWhatsappLinks !== undefined) _setAdminWhatsappLinks(snapshot.adminWhatsappLinks)
-          if (snapshot.adminChannelLink !== undefined) _setAdminChannelLink(snapshot.adminChannelLink)
-          if (typeof snapshot.paymentMethod === 'string') setPaymentMethod(snapshot.paymentMethod)
-          if (typeof snapshot.auditActualCash === 'string') setAuditActualCash(snapshot.auditActualCash)
-          if (Array.isArray(snapshot.walletLog)) setWalletLog(snapshot.walletLog)
-        }
-        setSyncQueue(Array.isArray(queue) ? queue : [])
-        setSyncMap(mappings && typeof mappings === 'object' ? mappings : { students: {}, books: {}, reservations: {} })
-        setReceiptArchiveItems(Array.isArray(receiptArchive) ? receiptArchive : [])
-      } catch {
-        // Fallback to in-memory/local bootstrap if IndexedDB is unavailable.
-      } finally {
-        if (!cancelled) setOfflineHydrated(true)
+  useOfflineSnapshot({
+    hydrated: offlineHydrated,
+    load: loadOfflineBootstrap,
+    apply: ({ snapshot, queue, mappings, receiptArchive }) => {
+      if (snapshot && typeof snapshot === 'object') {
+        if (typeof snapshot.useBackend === 'boolean') setUseBackend(snapshot.useBackend)
+        if (typeof snapshot.activeView === 'string') setActiveView(snapshot.activeView)
+        if (Array.isArray(snapshot.books)) setBooks(snapshot.books)
+        if (Array.isArray(snapshot.students)) setStudents(snapshot.students)
+        if (Array.isArray(snapshot.cartItems)) setCartItems(snapshot.cartItems)
+        if (typeof snapshot.searchTerm === 'string') setSearchTerm(snapshot.searchTerm)
+        if (typeof snapshot.selectedStudentId === 'string') setSelectedStudentId(snapshot.selectedStudentId)
+        if (typeof snapshot.discount === 'number') setDiscount(snapshot.discount)
+        if (Array.isArray(snapshot.pendingReservations)) setPendingReservations(snapshot.pendingReservations)
+        if (Array.isArray(snapshot.salesHistory)) setSalesHistory(snapshot.salesHistory)
+        if (Array.isArray(snapshot.withdrawals)) setWithdrawals(snapshot.withdrawals)
+        if (Array.isArray(snapshot.auditLog)) setAuditLog(snapshot.auditLog)
+        if (typeof snapshot.adminUnlocked === 'boolean') setAdminUnlocked(snapshot.adminUnlocked)
+        if (typeof snapshot.transactionCounter === 'number') setTransactionCounter(snapshot.transactionCounter)
+        if (snapshot.lastTransaction !== undefined) setLastTransaction(snapshot.lastTransaction)
+        if (snapshot.quickStudent && typeof snapshot.quickStudent === 'object') setQuickStudent(snapshot.quickStudent)
+        if (snapshot.emergencyForm && typeof snapshot.emergencyForm === 'object') setEmergencyForm(snapshot.emergencyForm)
+        if (typeof snapshot.auditStaffId === 'string') setAuditStaffId(snapshot.auditStaffId)
+        if (Array.isArray(snapshot.cancelledReservations)) setCancelledReservations(snapshot.cancelledReservations)
+        if (typeof snapshot.selectedStaffId === 'string') setSelectedStaffId(snapshot.selectedStaffId)
+        if (typeof snapshot.isDarkMode === 'boolean') setIsDarkMode(snapshot.isDarkMode)
+        if (typeof snapshot.followsUs === 'boolean') setFollowsUs(snapshot.followsUs)
+        if (typeof snapshot.adminCustomFooter === 'string') setAdminCustomFooter(snapshot.adminCustomFooter)
+        if (snapshot.adminWhatsappLinks !== undefined) _setAdminWhatsappLinks(snapshot.adminWhatsappLinks)
+        if (snapshot.adminChannelLink !== undefined) _setAdminChannelLink(snapshot.adminChannelLink)
+        if (typeof snapshot.paymentMethod === 'string') setPaymentMethod(snapshot.paymentMethod)
+        if (typeof snapshot.auditActualCash === 'string') setAuditActualCash(snapshot.auditActualCash)
+        if (Array.isArray(snapshot.walletLog)) setWalletLog(snapshot.walletLog)
       }
-    }
-    hydrateOfflineState()
-    return () => {
-      cancelled = true
-    }
-  }, [])
+      setSyncQueue(Array.isArray(queue) ? queue : [])
+      setSyncMap(mappings && typeof mappings === 'object' ? mappings : { students: {}, books: {}, reservations: {} })
+      setReceiptArchiveItems(Array.isArray(receiptArchive) ? receiptArchive : [])
+    },
+    onHydrated: () => setOfflineHydrated(true),
+    buildSnapshot: () =>
+      useBackend
+        ? {
+            useBackend,
+            activeView,
+            selectedStaffId,
+            isDarkMode,
+            followsUs,
+            adminCustomFooter,
+            adminWhatsappLinks,
+            adminChannelLink,
+            paymentMethod,
+            auditActualCash,
+          }
+        : {
+            useBackend,
+            activeView,
+            books,
+            students,
+            cartItems,
+            searchTerm,
+            selectedStudentId,
+            discount,
+            pendingReservations,
+            salesHistory,
+            withdrawals,
+            auditLog,
+            adminUnlocked,
+            transactionCounter,
+            lastTransaction,
+            quickStudent,
+            emergencyForm,
+            auditStaffId,
+            cancelledReservations,
+            selectedStaffId,
+            isDarkMode,
+            followsUs,
+            adminCustomFooter,
+            adminWhatsappLinks,
+            adminChannelLink,
+            paymentMethod,
+            auditActualCash,
+            walletLog,
+          },
+    save: (snapshot) => setOfflineSnapshot('app_state', snapshot),
+    deps: [
+      useBackend,
+      activeView,
+      books,
+      students,
+      cartItems,
+      searchTerm,
+      selectedStudentId,
+      discount,
+      pendingReservations,
+      salesHistory,
+      withdrawals,
+      auditLog,
+      adminUnlocked,
+      transactionCounter,
+      lastTransaction,
+      quickStudent,
+      emergencyForm,
+      auditStaffId,
+      cancelledReservations,
+      selectedStaffId,
+      isDarkMode,
+      followsUs,
+      adminCustomFooter,
+      adminWhatsappLinks,
+      adminChannelLink,
+      paymentMethod,
+      auditActualCash,
+      walletLog,
+    ],
+  })
 
   const handleSessionExpired = useCallback(() => {
     clearAuthState()
+    clearOfflineStorage().catch(() => {})
     setAuthState(null)
     setAuthError('Your session has expired. Please sign in again.')
   }, [])
@@ -668,6 +396,7 @@ function App() {
 
   const handleLogout = useCallback(async () => {
     await logout(apiBaseUrl)
+    clearOfflineStorage().catch(() => {})
     setAuthState(null)
   }, [])
 
@@ -685,87 +414,6 @@ function App() {
   useEffect(() => {
     document.body.setAttribute('dir', isRtl ? 'rtl' : 'ltr')
   }, [isRtl])
-
-  useEffect(() => {
-    if (!offlineHydrated) return
-    const snapshot = useBackend
-      ? {
-          useBackend,
-          activeView,
-          selectedStaffId,
-          isDarkMode,
-          followsUs,
-          adminCustomFooter,
-          adminWhatsappLinks,
-          adminChannelLink,
-          paymentMethod,
-          auditActualCash,
-          adminUnlocked,
-        }
-      : {
-          useBackend,
-          activeView,
-          books,
-          students,
-          cartItems,
-          searchTerm,
-          selectedStudentId,
-          discount,
-          pendingReservations,
-          salesHistory,
-          withdrawals,
-          auditLog,
-          adminUnlocked,
-          transactionCounter,
-          lastTransaction,
-          quickStudent,
-          emergencyForm,
-          auditStaffId,
-          cancelledReservations,
-          selectedStaffId,
-          isDarkMode,
-          followsUs,
-          adminCustomFooter,
-          adminWhatsappLinks,
-          adminChannelLink,
-          paymentMethod,
-          auditActualCash,
-          walletLog,
-        }
-    setOfflineSnapshot('app_state', snapshot).catch(() => {
-      // Keep runtime behavior even if persistence fails.
-    })
-  }, [
-    offlineHydrated,
-    useBackend,
-    activeView,
-    books,
-    students,
-    cartItems,
-    searchTerm,
-    selectedStudentId,
-    discount,
-    pendingReservations,
-    salesHistory,
-    withdrawals,
-    auditLog,
-    adminUnlocked,
-    transactionCounter,
-    lastTransaction,
-    quickStudent,
-    emergencyForm,
-    auditStaffId,
-    cancelledReservations,
-    selectedStaffId,
-    isDarkMode,
-    followsUs,
-    adminCustomFooter,
-    adminWhatsappLinks,
-    adminChannelLink,
-    paymentMethod,
-    auditActualCash,
-    walletLog,
-  ])
 
   useEffect(() => {
     if (!offlineHydrated) return
@@ -813,6 +461,7 @@ function App() {
   const processSyncQueue = useCallback(async () => {
     await runReplayCycle({
       queueSnapshot: syncQueue,
+      setQueueState: setSyncQueue,
       isAuthError,
       onAuthExpired: handleSessionExpired,
       runReplay: async () => {
@@ -923,70 +572,41 @@ function App() {
     }
   }, [activeView])
 
-  useEffect(() => {
-    if (!authUser) return
-    if (!useBackend) return
-    if (activeView !== 'receiptArchive') return
-    let cancelled = false
-    const run = async () => {
-      try {
-        const data = await refreshReceiptArchiveItems(apiRequest)
-        if (cancelled) return
-        setReceiptArchiveItems(data)
-      } catch {
-        if (cancelled) return
-        setReceiptArchiveItems([])
-      }
-    }
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [authUser, useBackend, activeView, apiRequest])
+  useViewData({
+    view: 'receiptArchive',
+    activeView,
+    enabled: Boolean(authUser && useBackend),
+    deps: [authUser, useBackend, apiRequest],
+    loader: () => refreshReceiptArchiveItems(apiRequest),
+    onSuccess: (data) => setReceiptArchiveItems(data),
+    onError: () => setReceiptArchiveItems([]),
+  })
 
-  useEffect(() => {
-    if (!authUser) return
-    if (!useBackend) return
-    if (activeView !== 'booksInsights') return
-    let cancelled = false
-    const run = async () => {
-      try {
-        const merged = await fetchBooksInsights(apiRequest, books)
-        if (cancelled) return
-        setBooksInsightsRows(merged)
-      } catch {
-        if (cancelled) return
-        setBooksInsightsRows([])
-      }
-    }
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [authUser, useBackend, activeView, books, apiRequest])
+  useViewData({
+    view: 'booksInsights',
+    activeView,
+    enabled: Boolean(authUser && useBackend),
+    deps: [authUser, useBackend, books, apiRequest],
+    loader: () => fetchBooksInsights(apiRequest, books),
+    onSuccess: (merged) => setBooksInsightsRows(merged),
+    onError: () => setBooksInsightsRows([]),
+  })
 
-  useEffect(() => {
-    if (!authUser) return
-    if (!useBackend) return
-    if (activeView !== 'accounting') return
-    let cancelled = false
-    const run = async () => {
-      try {
-        const { finance, supplies: suppliesList } = await refreshAccountingSnapshot(apiRequest)
-        if (cancelled) return
-        setFinanceReport(finance)
-        setSupplies(suppliesList)
-      } catch {
-        if (cancelled) return
-        setFinanceReport(null)
-        setSupplies([])
-      }
-    }
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [authUser, useBackend, activeView, apiRequest])
+  useViewData({
+    view: 'accounting',
+    activeView,
+    enabled: Boolean(authUser && useBackend),
+    deps: [authUser, useBackend, apiRequest],
+    loader: () => refreshAccountingSnapshot(apiRequest),
+    onSuccess: ({ finance, supplies: suppliesList }) => {
+      setFinanceReport(finance)
+      setSupplies(suppliesList)
+    },
+    onError: () => {
+      setFinanceReport(null)
+      setSupplies([])
+    },
+  })
 
   const stageOptions = [
     { value: 'first', label: t('stages.first') },
@@ -1004,48 +624,6 @@ function App() {
     { value: 'azhar', label: t('system.azhar') },
   ]
 
-  const cartDetails = useMemo(() => {
-    const items = cartItems
-      .map((entry) => {
-        const book = books.find((item) => item.id === entry.bookId)
-        if (!book) return null
-        
-        let lineUnit = book.sellingPrice
-        if (entry.type === 'reservation') {
-           lineUnit = clampDeposit(entry.deposit)
-        } else if (entry.linkedReservation) {
-           // If linked reservation, deduct deposit from unit price?
-           // Or show unit price as (Price - Deposit)
-           // Let's use the 'pickup' logic: Remaining = Price - Deposit
-           const deposit = entry.linkedReservation?.deposit || 0
-           lineUnit = Math.max(book.sellingPrice - deposit, 0)
-        }
-
-        const pendingArrival = entry.type === 'reservation' && Boolean(book.isArriving)
-        return {
-          ...book,
-          lineKey: entry.key,
-          qty: entry.qty,
-          type: entry.type,
-          deposit: clampDeposit(entry.deposit),
-          isZeroReservation: Boolean(entry.isZeroReservation),
-          lineTotal: entry.qty * lineUnit,
-          pendingArrival,
-          linkedReservation: entry.linkedReservation
-        }
-      })
-      .filter(Boolean)
-    const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0)
-    const safeDiscount = Number.isNaN(Number(discount)) ? 0 : Number(discount)
-    const total = Math.max(subtotal - safeDiscount, 0)
-    return { items, subtotal, total, safeDiscount }
-  }, [cartItems, books, discount])
-  const reservationOutstandingTotal = useMemo(() => {
-    return cartDetails.items
-      .filter((item) => item.type === 'reservation')
-      .reduce((sum, item) => sum + Math.max((Number(item.sellingPrice) || 0) * item.qty - (Number(item.deposit) || 0), 0), 0)
-  }, [cartDetails.items])
-
   const filteredBooks = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
     if (!term) return books
@@ -1058,27 +636,18 @@ function App() {
     )
   }, [books, searchTerm])
 
-  const studentAutocomplete = useMemo(() => {
-    const name = quickStudent.name?.trim().toLowerCase()
-    if (!name || name.length < 2) return null
-    return students.find(
-      (s) => s.name?.toLowerCase().includes(name) || name.includes(s.name?.toLowerCase())
-    )
-  }, [quickStudent.name, students])
+  const { filteredStudents: studentAutocomplete } = useStudentSearch({
+    students,
+    query: quickStudent.name,
+    options: { minQueryLength: 2, bidirectional: true, matchPhone: false, mode: 'find' },
+  })
 
   const selectedStudent = students.find((student) => student.id === Number(selectedStudentId))
-  const filteredStudentsForPicker = useMemo(() => {
-    const term = studentPickerSearch.trim().toLowerCase()
-    if (!term) return []
-    const digits = term.replace(/\D/g, '')
-    return students
-      .filter((s) => {
-        const byName = s.name?.toLowerCase().includes(term)
-        const byPhone = digits.length >= 3 && (s.phone || '').replace(/\D/g, '').includes(digits)
-        return byName || byPhone
-      })
-      .slice(0, 12)
-  }, [studentPickerSearch, students])
+  const { filteredStudents: filteredStudentsForPicker } = useStudentSearch({
+    students,
+    query: studentPickerSearch,
+    options: { emptyResult: 'none', minPhoneDigits: 3, limit: 12 },
+  })
   const pendingReservationMap = useMemo(() => {
     return pendingReservations.reduce((acc, item) => {
       acc[`${item.studentId}-${item.bookId}`] = item
@@ -1088,28 +657,6 @@ function App() {
 
   const hasPendingReservation = (studentId, bookId) =>
     Boolean(pendingReservationMap[`${studentId}-${bookId}`])
-
-  const addCartLine = (bookId, type, options) => {
-    const key = cartKey(bookId, type)
-    setCartItems((prev) => {
-      const existing = prev.find((item) => item.key === key)
-      if (existing) {
-        return prev.map((item) => (item.key === key ? { ...item, qty: item.qty + 1 } : item))
-      }
-      return [
-        ...prev,
-        {
-          key,
-          bookId,
-          qty: 1,
-          type,
-          deposit: Number(options?.deposit) || 0,
-          isZeroReservation: Boolean(options?.isZeroReservation),
-          linkedReservation: options?.linkedReservation || null,
-        },
-      ]
-    })
-  }
 
   const addToCart = (book) => {
     if (selectedStudent && hasPendingReservation(selectedStudent.id, book.id)) {
@@ -1122,47 +669,6 @@ function App() {
 
     const type = book.isArriving ? 'reservation' : 'sale'
     addCartLine(book.id, type, { deposit: type === 'reservation' ? getDefaultReservationDeposit(book) : 0, isZeroReservation: false })
-  }
-
-  const updateCartQty = (key, delta) => {
-    setCartItems((prev) => {
-      const updated = prev
-        .map((item) => (item.key === key ? { ...item, qty: item.qty + delta } : item))
-        .filter((item) => item.qty > 0)
-      return updated
-    })
-  }
-
-  const updateCartType = (key, nextType) => {
-    setCartItems((prev) => {
-      const item = prev.find((i) => i.key === key)
-      if (!item) return prev
-      const book = books.find((b) => b.id === item.bookId)
-      const safeType = nextType === 'sale' && book?.isArriving ? 'reservation' : nextType
-      const nextKey = cartKey(item.bookId, safeType)
-      if (nextKey === item.key) return prev
-      const existing = prev.find((i) => i.key === nextKey)
-      const nextItem = {
-        ...item,
-        type: safeType,
-        key: nextKey,
-        linkedReservation: safeType === 'reservation' ? null : item.linkedReservation,
-        deposit: safeType === 'reservation' ? (item.deposit || getDefaultReservationDeposit(book)) : item.deposit,
-        isZeroReservation: safeType === 'reservation' ? Boolean(item.isZeroReservation) : false,
-      }
-      if (!existing) {
-        return prev.map((i) => (i.key === item.key ? nextItem : i))
-      }
-      return prev
-        .filter((i) => i.key !== item.key)
-        .map((i) => (i.key === existing.key ? { ...i, qty: i.qty + item.qty } : i))
-    })
-  }
-
-  const updateCartDeposit = (key, deposit) => {
-    setCartItems((prev) =>
-      prev.map((item) => (item.key === key ? { ...item, deposit, isZeroReservation: Number(deposit) === 0 } : item)),
-    )
   }
 
   const formatTransactionId = (n) => `ED-${String(n).padStart(4, '0')}`
@@ -1201,11 +707,11 @@ function App() {
   }
 
   const openBookModal = (mode, data = null) => {
-    setBookModal({ open: true, mode, data })
+    bookModalHelpers.open({ mode, data })
   }
 
   const openStudentModal = (mode, data = null) => {
-    setStudentModal({ open: true, mode, data })
+    studentModalHelpers.open({ mode, data })
   }
 
   const saveBook = async (event) => {
@@ -1267,7 +773,7 @@ function App() {
           reservedStock: bookModal.data?.reservedStock ?? 0,
         },
       })
-      setBookModal({ open: false, mode: 'add', data: null })
+      bookModalHelpers.close()
       return
     }
 
@@ -1291,7 +797,7 @@ function App() {
         const ui = mapApiBookToUi(created)
         setBooks((prev) => [...prev, ui])
       }
-      setBookModal({ open: false, mode: 'add', data: null })
+      bookModalHelpers.close()
     } catch (error) {
       alert(error?.message || 'فشل حفظ الكتاب')
     }
@@ -1308,9 +814,8 @@ function App() {
     
     // Check duplicates
     if (studentModal.mode === 'add') {
-       const exists = students.some(s => s.phone === phone || s.name.toLowerCase() === name.toLowerCase())
-       if (exists) return alert('هذا الطالب مسجل بالفعل (الاسم أو الهاتف مكرر)')
-    }
+       if (isStudentDuplicate(students, { name, phone })) return alert('هذا الطالب مسجل بالفعل (الاسم أو الهاتف مكرر)')
+     }
 
     const payload = {
       name: formData.get('name'),
@@ -1338,7 +843,7 @@ function App() {
           balance: studentModal.data?.balance ?? 0,
         },
       })
-      setStudentModal({ open: false, mode: 'add', data: null })
+      studentModalHelpers.close()
       return
     }
 
@@ -1362,7 +867,7 @@ function App() {
         const ui = mapApiStudentToUi(created)
         setStudents((prev) => [...prev, ui])
       }
-      setStudentModal({ open: false, mode: 'add', data: null })
+      studentModalHelpers.close()
     } catch (error) {
       alert(error?.message || 'فشل حفظ الطالب')
     }
@@ -1467,343 +972,71 @@ function App() {
     setEmergencyForm({ amount: '', reason: '', staffId: '' })
   }
 
-  const handleCompleteSale = async () => {
-    if (cartDetails.items.length === 0) return
-    let studentForSale = selectedStudent
-    if (!studentForSale && quickStudent.name?.trim() && quickStudent.phone?.trim()) {
-      if (!useBackend) {
-        const newStudent = {
-          id: Date.now(),
-          name: quickStudent.name.trim(),
-          phone: quickStudent.phone.trim(),
-          stage: quickStudent.stage || 'first',
-          gender: quickStudent.gender || 'male',
-          system: quickStudent.system || 'general',
-          specialty: quickStudent.specialty || '',
-        }
-        setStudents((prev) => [...prev, newStudent])
-        enqueueSync({
-          type: 'student_upsert',
-          mode: 'add',
-          localId: newStudent.id,
-          payload: {
-            ...newStudent,
-            balance: 0,
-          },
-        })
-        setSelectedStudentId(String(newStudent.id))
-        setQuickStudent({ name: '', phone: '', stage: 'first', gender: 'male', system: 'general', specialty: '' })
-        studentForSale = newStudent
-      } else {
-        try {
-          const created = await apiRequest('/students', {
-            method: 'POST',
-            body: JSON.stringify(mapUiStudentToApi({ ...quickStudent, balance: 0 })),
-          })
-          const ui = mapApiStudentToUi(created)
-          setStudents((prev) => [...prev, ui])
-          setSelectedStudentId(String(ui.id))
-          setQuickStudent({ name: '', phone: '', stage: 'first', gender: 'male', system: 'general', specialty: '' })
-          studentForSale = ui
-        } catch (error) {
-          alert(error?.message || 'فشل تسجيل الطالب')
-          return
-        }
-      }
+  const handleAdminUnlock = (event) => {
+    event.preventDefault()
+    if (adminPassword === 'educon_admin') {
+      setAdminUnlocked(true)
+      setAdminPassword('')
     }
-    if (useBackend && !studentForSale?.id) {
-      alert('اختر طالبًا قبل إتمام البيع')
-      return
-    }
-    const transactionId = formatTransactionId(transactionCounter)
-    const transactionDate = new Date()
-    const costTotal = cartDetails.items.reduce((sum, item) => {
-      if (item.type === 'reservation') return sum
-      return sum + item.costPrice * item.qty
-    }, 0)
-    const netProfit = cartDetails.total - costTotal
+  }
 
-    const hasReservation = cartDetails.items.some((i) => i.type === 'reservation')
-    const allReservation = cartDetails.items.length > 0 && cartDetails.items.every((i) => i.type === 'reservation')
-    const receiptType = allReservation ? 'reservation' : hasReservation ? 'sale' : 'sale'
-    const saleEntry = {
-      id: transactionId,
-      date: transactionDate.toISOString(),
-      staffId: selectedStaffId,
-      staffName: t(`staff.${selectedStaffId}`),
-      student: studentForSale,
-      items: cartDetails.items,
-      subtotal: cartDetails.subtotal,
-      discount: cartDetails.safeDiscount,
-      total: cartDetails.total,
-      costTotal,
-      netProfit,
-      receiptType,
-      paymentMethod,
-    }
-
-    const newReservations = cartDetails.items
-      .filter((item) => item.type === 'reservation')
-      .map((item) => ({
-        id: `${transactionId}-${item.id}`,
-        transactionId,
-        studentId: studentForSale?.id,
-        bookId: item.id,
-        qty: item.qty,
-        status: 'pending',
-        deposit: item.deposit,
-        pendingArrival: item.pendingArrival,
-        date: transactionDate.toISOString(),
-      }))
-      .filter((item) => item.studentId)
-
-    let committedToServer = false
-    if (useBackend) {
-      try {
-        const reservationItems = cartDetails.items.filter((item) => item.type === 'reservation')
-        for (const item of reservationItems) {
-          await apiRequest('/reservations', {
-            method: 'POST',
-            body: JSON.stringify({
-              student_id: studentForSale.id,
-              book_id: item.id,
-              quantity: item.qty,
-              deposit_amount: item.deposit || 0,
-              staff_name: selectedStaffId,
-            }),
-          })
-        }
-
-        const saleItems = cartDetails.items
-          .filter((item) => item.type !== 'reservation')
-          .map((item) => ({
-            book_id: item.id,
-            quantity: item.qty,
-            reservation_id: item.linkedReservation?.id != null ? Number(item.linkedReservation.id) : null,
-          }))
-        if (saleItems.length) {
-          await apiRequest('/transactions', {
-            method: 'POST',
-            body: JSON.stringify({
-              student_id: studentForSale.id,
-              discount: cartDetails.safeDiscount,
-              staff_name: selectedStaffId,
-              items: saleItems,
-            }),
-          })
-        }
-        committedToServer = true
-      } catch (error) {
-        if (isAuthError(error)) {
-          handleSessionExpired()
-          return
-        }
-        alert((error?.message || 'فشل حفظ العملية على السيرفر') + ' — تم التحويل لوضع أوفلاين وسيتم رفعها عند عودة الاتصال')
-        setUseBackend(false)
-      }
-    }
-
-    setSalesHistory((prev) => [saleEntry, ...prev])
-    if (!committedToServer && newReservations.length) {
-      setPendingReservations((prev) => [...prev, ...newReservations])
-      for (const reservation of newReservations) {
-        enqueueSync({
-          type: 'reservation_create',
-          localReservationId: reservation.id,
-          payload: {
-            studentId: reservation.studentId,
-            bookId: reservation.bookId,
-            qty: reservation.qty,
-            deposit: reservation.deposit,
-            staffName: selectedStaffId,
-          },
-        })
-      }
-    }
-    setTransactionCounter((prev) => prev + 1)
-    setLastTransaction(saleEntry)
-    
-    // Handle Flexible Payment (Debt/Wallet)
-    const paid = Number(paidAmount)
-    const totalDue = cartDetails.total
-    let nextBalance = Number(studentForSale?.balance) || 0
-    if (studentForSale?.id) {
-       // 1. Debt (Underpayment)
-       if (paidAmount !== '' && paid < totalDue) {
-          const debt = totalDue - paid
-          nextBalance -= debt
-          setStudents(prev => prev.map(s => 
-             s.id === studentForSale.id 
-               ? { ...s, balance: (s.balance || 0) - debt } 
-               : s
-          ))
-          // Log Debt Transaction
-          const logEntry = {
-            id: Date.now(),
-            studentId: studentForSale.id,
-            amount: -debt,
-            type: 'purchase_debt',
-            date: new Date().toISOString(),
-            description: `متبقي على فاتورة ${transactionId}`
-          }
-          setWalletLog(prev => [logEntry, ...prev])
-       }
-       // 2. Wallet Deposit (Overpayment)
-       else if (paidAmount !== '' && paid > totalDue) {
-          const change = paid - totalDue
-          nextBalance += change
-          // Ask user if they want to add to wallet? For now, we assume YES based on request "Smart Wallet"
-          // In a real app, maybe a modal confirm. But let's auto-deposit for efficiency as requested.
-          setStudents(prev => prev.map(s => 
-             s.id === studentForSale.id 
-               ? { ...s, balance: (s.balance || 0) + change } 
-               : s
-          ))
-           // Log Deposit Transaction
-           const logEntry = {
-            id: Date.now(),
-            studentId: studentForSale.id,
-            amount: change,
-            type: 'deposit_change',
-            date: new Date().toISOString(),
-            description: `باقي فاتورة ${transactionId}`
-          }
-          setWalletLog(prev => [logEntry, ...prev])
-       }
-       // 3. Payment via Wallet (If selected payment method is 'wallet' or partial)
-       // This logic assumes "Paid Amount" is CASH. 
-       // If user wants to pay FROM wallet, they should probably select "Wallet" in payment methods
-       // OR we deduct from wallet automatically?
-       // Let's keep it simple: "Paid Amount" is what they handed over. 
-       // If they handed 0, and have balance, we can deduct?
-       // The user asked for "Wallet has money... exchange books from it".
-       
-       if (paymentMethod === 'wallet' && studentForSale.balance >= totalDue) {
-          // Deduct full amount
-           nextBalance -= totalDue
-           setStudents(prev => prev.map(s => 
-             s.id === studentForSale.id 
-               ? { ...s, balance: (s.balance || 0) - totalDue } 
-               : s
-          ))
-          const logEntry = {
-            id: Date.now(),
-            studentId: studentForSale.id,
-            amount: -totalDue,
-            type: 'purchase_wallet',
-            date: new Date().toISOString(),
-            description: `دفع فاتورة ${transactionId} من المحفظة`
-          }
-          setWalletLog(prev => [logEntry, ...prev])
-       }
-       if (!committedToServer) {
-          enqueueSync({
-            type: 'student_balance_set',
-            payload: {
-              studentId: studentForSale.id,
-              balance: nextBalance,
-              studentSnapshot: {
-                ...studentForSale,
-                balance: nextBalance,
-              },
-            },
-          })
-       }
-    }
-
-    const soldItems = cartDetails.items.filter((item) => item.type !== 'reservation')
-    const reservedItems = cartDetails.items.filter((item) => item.type === 'reservation')
-    
-    // For items that were "linkedReservation", we need to mark the reservation as completed (picked up)
-    // We didn't actually "pick up" via the official flow, but we sold the book.
-    // So we should remove the pending reservation.
-    const linkedReservations = cartDetails.items
-        .filter(item => item.linkedReservation)
-        .map(item => item.linkedReservation.id)
-    
-    if (!committedToServer && linkedReservations.length > 0) {
-       setPendingReservations(prev => prev.filter(r => !linkedReservations.includes(r.id)))
-    }
-    
-    // Update Stock: Deduct for BOTH sold items AND reserved items (to hold stock)
-    // Combined list of items that need stock deduction
-    // Note: If item was "linkedReservation", stock was ALREADY deducted when reserved.
-    // So we should NOT deduct again for linkedReservation items.
-    
-    const stockDeductItems = [
-       ...soldItems.filter(item => !item.linkedReservation), // Only deduct if NOT linked (not already reserved)
-       ...reservedItems
-    ]
-    
-    if (!committedToServer && stockDeductItems.length) {
-      setBooks((prev) =>
-        prev.map((book) => {
-          const item = stockDeductItems.find((i) => i.id === book.id)
-          if (!item) return book
-          // For reservations, we deduct stock now.
-          // Note: If item is 'arriving', stock might be 0, so we allow negative or just 0?
-          // Usually we shouldn't reserve if no stock, but user might want "Pre-order".
-          // Let's stick to: If in stock, deduct. If not, maybe allow (negative stock implies pre-order demand).
-          // For safety, let's max at 0.
-          const nextStock = Math.max((book.stock || 0) - item.qty, 0)
-          return { ...book, stock: nextStock }
+  const checkoutController = useMemo(
+    () =>
+      createCheckoutController({
+        apiRequest,
+        enqueueSync,
+        isAuthError,
+        handleSessionExpired,
+        fetchCoreSnapshot,
+        clearCart,
+        formatTransactionId,
+        t,
+        mapUiStudentToApi,
+        mapApiBookToUi,
+        mapApiStudentToUi,
+        alert,
+        getCheckoutState: () => ({
+          cartDetails,
+          selectedStudent,
+          quickStudent,
+          useBackend,
+          transactionCounter,
+          selectedStaffId,
+          paymentMethod,
+          paidAmount,
         }),
-      )
-    }
-    if (!committedToServer) {
-      const saleItemsForSync = cartDetails.items
-        .filter((item) => item.type !== 'reservation')
-        .map((item) => ({
-          bookId: item.id,
-          qty: item.qty,
-          reservationId: item.linkedReservation?.id || null,
-        }))
-      if (saleItemsForSync.length > 0) {
-        enqueueSync({
-          type: 'transaction_create',
-          payload: {
-            studentId: studentForSale?.id,
-            discount: cartDetails.safeDiscount,
-            staffName: selectedStaffId,
-            items: saleItemsForSync,
-          },
-        })
-      }
-    }
-    if (useBackend && studentForSale?.id) {
-      try {
-        if (paidAmount !== '' || paymentMethod === 'wallet') {
-          await apiRequest(`/students/${studentForSale.id}`, {
-            method: 'PUT',
-            body: JSON.stringify(mapUiStudentToApi({ ...studentForSale, balance: nextBalance })),
-          })
-        }
-        const { uiBooks, uiStudents, pending } = await fetchCoreSnapshot({
-          apiRequest,
-          mapApiBookToUi,
-          mapApiStudentToUi,
-        })
-        setBooks(uiBooks)
-        setStudents(uiStudents)
-        setPendingReservations(pending)
-      } catch (error) {
-        alert(error?.message || 'فشل تحديث البيانات من السيرفر')
-      }
-    }
-    setCartItems([])
-    setDiscount(0)
-    setPaidAmount('')
-    setSelectedStudentId('')
-    setQuickStudent({
-      name: '',
-      phone: '',
-      stage: 'first',
-      gender: 'male',
-      system: 'general',
-      specialty: '',
-    })
-    setSearchTerm('')
-    setActiveView('receipt')
+        setters: {
+          setStudents,
+          setSelectedStudentId,
+          setQuickStudent,
+          setSalesHistory,
+          setPendingReservations,
+          setTransactionCounter,
+          setLastTransaction,
+          setWalletLog,
+          setBooks,
+          setUseBackend,
+          setDiscount,
+          setPaidAmount,
+          setSearchTerm,
+          setActiveView,
+        },
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      cartDetails,
+      selectedStudent,
+      quickStudent,
+      useBackend,
+      transactionCounter,
+      selectedStaffId,
+      paymentMethod,
+      paidAmount,
+    ],
+  )
+
+  const handleCompleteSale = async () => {
+    await checkoutController.completeSale()
   }
 
   const effectiveStudent = useMemo(() => {
@@ -1953,6 +1186,27 @@ function App() {
       return acc
     },
     {},
+  )
+
+  const topBooksRows = books
+    .map((book) => {
+      const soldQty = salesHistory.reduce((sum, entry) => {
+        const items = Array.isArray(entry.items) ? entry.items : []
+        const fromSale = items.filter((item) => item.id === book.id && (item.type === 'sale' || item.type === 'pickup'))
+        return (
+          sum +
+          fromSale.reduce((s, item) => s + (item.qty || 1), 0)
+        )
+      }, 0)
+      return { book, soldQty }
+    })
+    .filter((row) => row.soldQty > 0)
+    .sort((a, b) => b.soldQty - a.soldQty)
+    .slice(0, 5)
+  const noSoldBooks = books.every((book) =>
+    salesHistory.every((entry) =>
+      !(Array.isArray(entry.items) && entry.items.some((item) => item.id === book.id)),
+    ),
   )
 
   const exportToExcel = () => {
@@ -2156,425 +1410,56 @@ function App() {
           </header>
 
           {activeView === 'pos' && (
-            <section className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-              <div className="space-y-6">
-                <div className="rounded-3xl bg-white p-6 shadow">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold">{t('sections.studentSelect')}</h3>
-                    <button
-                      type="button"
-                      onClick={() => openStudentModal('add')}
-                      className="flex items-center gap-2 text-sm font-semibold text-brand-600"
-                    >
-                      <Plus className="h-4 w-4" />
-                      {t('actions.add')}
-                    </button>
-                  </div>
-                  <InputField
-                    name="studentPickerSearch"
-                    label="بحث طالب قديم"
-                    value={studentPickerSearch}
-                    onChange={(event) => setStudentPickerSearch(event.target.value)}
-                    placeholder="اكتب الاسم أو الموبايل"
-                  />
-                  {selectedStudent && (
-                    <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                      تم اختيار: {selectedStudent.name} · {selectedStudent.phone || 'بدون هاتف'}
-                    </div>
-                  )}
-                  {studentPickerSearch.trim() && (
-                    <div className="mt-3 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-white">
-                      {filteredStudentsForPicker.map((student) => (
-                        <button
-                          key={student.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedStudentId(String(student.id))
-                            setStudentPickerSearch(student.name || '')
-                          }}
-                          className="flex w-full items-center justify-between border-b border-slate-100 px-4 py-3 text-right text-sm hover:bg-slate-50"
-                        >
-                          <span className="font-semibold text-slate-800">{student.name}</span>
-                          <span className="text-xs text-slate-500">{student.phone || '--'}</span>
-                        </button>
-                      ))}
-                      {filteredStudentsForPicker.length === 0 && (
-                        <p className="px-4 py-3 text-sm text-slate-400">لا يوجد مطابقات</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-3xl border border-brand-100 bg-white p-6 shadow">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold">{t('sections.quickRegister')}</h3>
-                    <p className="text-xs text-slate-400">{t('labels.quickRegisterHint')}</p>
-                  </div>
-                  <form onSubmit={handleQuickStudentSubmit} className="mt-4 grid gap-4">
-                    <div>
-                      <InputField
-                        name="quickName"
-                        label={t('fields.name')}
-                        value={quickStudent.name}
-                        onChange={(event) =>
-                          setQuickStudent((prev) => ({ ...prev, name: event.target.value }))
-                        }
-                        required
-                      />
-                      {studentAutocomplete && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setQuickStudent({
-                              name: studentAutocomplete.name,
-                              phone: studentAutocomplete.phone || '',
-                              stage: studentAutocomplete.stage || 'first',
-                              gender: studentAutocomplete.gender || 'male',
-                              system: studentAutocomplete.system || 'general',
-                              specialty: studentAutocomplete.specialty || '',
-                            })
-                            setSelectedStudentId(String(studentAutocomplete.id))
-                          }}
-                          className="mt-1 text-xs font-semibold text-brand-600"
-                        >
-                          {t('labels.useExistingStudent')}
-                        </button>
-                      )}
-                    </div>
-                    <InputField
-                      name="quickPhone"
-                      label={t('fields.phone')}
-                      value={quickStudent.phone}
-                      onChange={(event) =>
-                        setQuickStudent((prev) => ({ ...prev, phone: event.target.value }))
-                      }
-                      required
-                    />
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <SelectField
-                        label={t('fields.stage')}
-                        value={quickStudent.stage}
-                        onChange={(event) =>
-                          setQuickStudent((prev) => ({ ...prev, stage: event.target.value }))
-                        }
-                        options={stageOptions}
-                      />
-                      <SelectField
-                        label={t('fields.gender')}
-                        value={quickStudent.gender}
-                        onChange={(event) =>
-                          setQuickStudent((prev) => ({ ...prev, gender: event.target.value }))
-                        }
-                        options={genderOptions}
-                      />
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <SelectField
-                        label={t('fields.system')}
-                        value={quickStudent.system}
-                        onChange={(event) =>
-                          setQuickStudent((prev) => ({ ...prev, system: event.target.value }))
-                        }
-                        options={systemOptions}
-                      />
-                      <InputField
-                        name="specialty"
-                        label={t('fields.specialty')}
-                        value={quickStudent.specialty}
-                        onChange={(event) =>
-                          setQuickStudent((prev) => ({ ...prev, specialty: event.target.value }))
-                        }
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      className="flex items-center justify-center gap-2 rounded-2xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
-                    >
-                      <Plus className="h-4 w-4" />
-                      {t('actions.registerStudent')}
-                    </button>
-                  </form>
-                </div>
-
-                <div className="rounded-3xl bg-white p-6 shadow">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold">{t('sections.products')}</h3>
-                    <span className="text-xs font-semibold text-slate-400">
-                      {filteredBooks.length} items
-                    </span>
-                  </div>
-                  <div className="mt-4 grid gap-3">
-                    {filteredBooks.map((book) => {
-                      const highlightReservation =
-                        selectedStudent && hasPendingReservation(selectedStudent.id, book.id)
-                      const reservedStock = Number(book.reservedStock) || 0
-                      const availableToSell = Math.max((Number(book.stock) || 0) - reservedStock, 0)
-                      const canAddSale = book.isArriving || availableToSell > 0 || Boolean(highlightReservation)
-                      return (
-                        <div
-                          key={book.id}
-                          className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 ${
-                            highlightReservation
-                              ? 'ring-2 ring-sky-300 shadow-[0_0_12px_rgba(125,211,252,0.6)]'
-                              : ''
-                          }`}
-                        >
-                          <div>
-                            <p className="font-semibold text-slate-900">{book.title}</p>
-                            <p className="text-xs text-slate-500">
-                              {book.author} · {t('labels.barcode')}: {book.barcode}
-                            </p>
-                            {highlightReservation && (
-                              <p className="mt-1 text-xs font-semibold text-sky-600">
-                                {t('labels.pendingReservation')} (سيتم خصم العربون تلقائيًا)
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-sm">
-                              <p className="font-semibold text-brand-600">
-                                {formatCurrency(locale, book.sellingPrice)}
-                              </p>
-                              <p className="text-xs text-slate-400">
-                                {t('labels.stock')}: {book.stock} · محجوز: {reservedStock} · متاح للبيع: {availableToSell}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => addToCart(book)}
-                              disabled={!canAddSale}
-                              className={`rounded-2xl px-4 py-2 text-sm font-semibold text-white ${canAddSale ? 'bg-brand-600' : 'bg-slate-300 cursor-not-allowed'}`}
-                            >
-                              {t('actions.addToCart')}
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div className="rounded-3xl bg-white p-6 shadow">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold">{t('sections.cart')}</h3>
-                    <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-600">
-                      {cartDetails.items.length} items
-                    </span>
-                  </div>
-
-                  {cartDetails.items.length === 0 ? (
-                    <p className="mt-6 text-sm text-slate-400">{t('empty.cart')}</p>
-                  ) : (
-                    <div className="mt-4 space-y-4">
-                      {cartDetails.items.map((item) => (
-                        <div
-                          key={item.lineKey}
-                          className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                              <p className="text-xs text-slate-400">
-                                {formatCurrency(locale, item.sellingPrice)} · {t('labels.qty')}{' '}
-                                {item.qty}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => updateCartQty(item.lineKey, -1)}
-                                className="h-7 w-7 rounded-full border border-slate-200 text-sm"
-                              >
-                                -
-                              </button>
-                              <span className="text-sm font-semibold">{item.qty}</span>
-                              <button
-                                type="button"
-                                onClick={() => updateCartQty(item.lineKey, 1)}
-                                className="h-7 w-7 rounded-full border border-slate-200 text-sm"
-                              >
-                                +
-                              </button>
-                            </div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={item.isArriving}
-                                onClick={() => updateCartType(item.lineKey, 'sale')}
-                                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                                  item.type === 'sale'
-                                    ? 'bg-brand-600 text-white'
-                                    : 'border border-slate-200 text-slate-500'
-                                } ${item.isArriving ? 'cursor-not-allowed opacity-50' : ''}`}
-                              >
-                                {t('labels.sale')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => updateCartType(item.lineKey, 'reservation')}
-                                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                                  item.type === 'reservation'
-                                    ? 'bg-sky-600 text-white'
-                                    : 'border border-slate-200 text-slate-500'
-                                }`}
-                              >
-                                {t('labels.reservation')}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={item.isArriving && item.type !== 'reservation'}
-                                onClick={() => {
-                                  const nextType = item.type === 'sale' ? 'reservation' : 'sale'
-                                  addCartLine(item.id, nextType, {
-                                    deposit: nextType === 'reservation' ? getDefaultReservationDeposit(item) : 0,
-                                    isZeroReservation: false,
-                                  })
-                                }}
-                                className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600"
-                              >
-                                {item.type === 'sale' ? 'إضافة حجز' : 'إضافة شراء'}
-                              </button>
-                            </div>
-                            {item.type === 'reservation' && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-slate-500">{t('labels.deposit')}</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  value={item.deposit}
-                                  onChange={(event) =>
-                                    updateCartDeposit(item.lineKey, event.target.value)
-                                  }
-                                  className="w-24 rounded-xl border border-slate-200 bg-white px-2 py-1 text-right text-xs"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => updateCartDeposit(item.lineKey, item.isZeroReservation ? getDefaultReservationDeposit(item) : 0)}
-                                  className="rounded-xl border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600"
-                                >
-                                  {item.isZeroReservation ? 'إلغاء الصفري' : 'حجز صفري'}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          {item.type === 'reservation' && item.pendingArrival && (
-                            <div className="mt-2 inline-flex items-center rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">
-                              {t('labels.pendingArrival')}
-                            </div>
-                          )}
-                          {item.linkedReservation && (
-                             <div className="mt-2 inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                استكمال حجز (تم خصم {item.linkedReservation.deposit})
-                             </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="mt-6 space-y-3 rounded-2xl bg-slate-50 p-4 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500">طريقة الدفع</span>
-                      <select
-                        value={paymentMethod}
-                        onChange={(event) => setPaymentMethod(event.target.value)}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-1 text-sm"
-                      >
-                        <option value="cash">كاش</option>
-                        <option value="wallet">فودافون كاش</option>
-                        <option value="bank">تحويل بنكي</option>
-                      </select>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500">{t('labels.subtotal')}</span>
-                      <span className="font-semibold text-slate-900">
-                        {formatCurrency(locale, cartDetails.subtotal)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500">{t('labels.discount')}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={discount}
-                        onChange={(event) => setDiscount(event.target.value)}
-                        className="w-28 rounded-xl border border-slate-200 bg-white px-3 py-1 text-right text-sm"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-base">
-                      <span className="text-slate-900">{t('labels.total')}</span>
-                      <span className="font-semibold text-brand-700">
-                        {formatCurrency(locale, cartDetails.total)}
-                      </span>
-                    </div>
-                    {reservationOutstandingTotal > 0 && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-500">متبقي على الحجوزات لاحقًا</span>
-                        <span className="font-semibold text-amber-700">{formatCurrency(locale, reservationOutstandingTotal)}</span>
-                      </div>
-                    )}
-
-                    <div className="border-t border-slate-200 pt-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">المدفوع</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={paidAmount}
-                          onChange={(event) => setPaidAmount(event.target.value)}
-                          placeholder={cartDetails.total}
-                          className="w-28 rounded-xl border border-slate-200 bg-white px-3 py-1 text-right text-sm"
-                        />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-sm font-semibold">
-                        <span>
-                          {Number(paidAmount) >= cartDetails.total ? 'الباقي للعميل' : 'متبقي عليه (دين)'}
-                        </span>
-                        <span className={Number(paidAmount) >= cartDetails.total ? 'text-emerald-600' : 'text-rose-600'}>
-                          {formatCurrency(locale, Math.abs((Number(paidAmount) || 0) - cartDetails.total))}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleCompleteSale}
-                    className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    {t('actions.completeSale')}
-                  </button>
-                </div>
-
-                <ThermalReceipt
-                  t={t}
-                  locale={locale}
-                  receipt={receiptPayload}
-                  receiptLink={receiptLink}
-                  hasPhone={Boolean(whatsappPhone)}
-                  followsUs={followsUs}
-                  onFollowsUsChange={setFollowsUs}
-                  whatsappGroupLink={whatsappGroupLink}
-                  channelLink={channelLink}
-                  onPrint={archiveAndPrintReceipt}
-                />
-              </div>
-            </section>
+            <POSView
+              t={t}
+              locale={locale}
+              openStudentModal={openStudentModal}
+              studentPickerSearch={studentPickerSearch}
+              setStudentPickerSearch={setStudentPickerSearch}
+              selectedStudent={selectedStudent}
+              filteredStudentsForPicker={filteredStudentsForPicker}
+              setSelectedStudentId={setSelectedStudentId}
+              handleQuickStudentSubmit={handleQuickStudentSubmit}
+              quickStudent={quickStudent}
+              setQuickStudent={setQuickStudent}
+              studentAutocomplete={studentAutocomplete}
+              stageOptions={stageOptions}
+              genderOptions={genderOptions}
+              systemOptions={systemOptions}
+              filteredBooks={filteredBooks}
+              hasPendingReservation={hasPendingReservation}
+              addToCart={addToCart}
+              cartDetails={cartDetails}
+              updateCartQty={updateCartQty}
+              updateCartType={updateCartType}
+              addCartLine={addCartLine}
+              updateCartDeposit={updateCartDeposit}
+              paymentMethod={paymentMethod}
+              setPaymentMethod={setPaymentMethod}
+              discount={discount}
+              setDiscount={setDiscount}
+              reservationOutstandingTotal={reservationOutstandingTotal}
+              paidAmount={paidAmount}
+              setPaidAmount={setPaidAmount}
+              handleCompleteSale={handleCompleteSale}
+              receiptPayload={receiptPayload}
+              receiptLink={receiptLink}
+              whatsappPhone={whatsappPhone}
+              followsUs={followsUs}
+              setFollowsUs={setFollowsUs}
+              whatsappGroupLink={whatsappGroupLink}
+              channelLink={channelLink}
+              archiveAndPrintReceipt={archiveAndPrintReceipt}
+            />
           )}
-
           {activeView === 'books' && (
-            <BooksTable
+            <BooksView
               t={t}
               locale={locale}
               books={books}
               onAdd={() => openBookModal('add')}
               onEdit={(book) => openBookModal('edit', book)}
-              onPrint={(book) => setBarcodeModal({ open: true, book })}
+              onPrint={(book) => barcodeModalHelpers.open({ book })}
             />
           )}
 
@@ -2587,7 +1472,7 @@ function App() {
           )}
 
           {activeView === 'students' && (
-            <StudentsTable
+            <StudentsView
               t={t}
               students={students}
               stageOptions={stageOptions}
@@ -2595,343 +1480,347 @@ function App() {
               systemOptions={systemOptions}
               onAdd={() => openStudentModal('add')}
               onEdit={(student) => openStudentModal('edit', student)}
-              onView={(student) => setStudentDetailsModal({ open: true, student })}
+              onView={(student) => studentDetailsModalHelpers.open({ student })}
             />
           )}
 
           {activeView === 'pickupReservation' && (
-            <div className="rounded-3xl bg-white p-10 text-center shadow">
-              <PackageCheck className="mx-auto h-12 w-12 text-brand-600" />
-              <h3 className="mt-4 text-lg font-semibold">{t('nav.pickupReservation')}</h3>
-              <p className="mt-2 text-sm text-slate-500">{t('labels.searchByTxOrPhone')}</p>
-              <input
-                type="text"
-                value={pickupSearch}
-                onChange={(e) => setPickupSearch(e.target.value)}
-                placeholder="ED-0001 أو الاسم أو الهاتف"
-                className="mt-4 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setLegacyReservationModal({ open: true })}
-                className="mt-3 rounded-2xl border border-dashed border-brand-300 bg-brand-50 px-4 py-2 text-xs font-semibold text-brand-700"
-              >
-                حجز من الدفتر القديم
-              </button>
-              <PickupReservationContent
-                t={t}
-                locale={locale}
-                pickupSearch={pickupSearch}
-                students={students}
-                books={books}
-                pendingReservations={pendingReservations}
-                salesHistory={salesHistory}
-                formatCurrency={formatCurrency}
-                onComplete={({ student, reservations }) => {
-                  const ids = reservations.map((r) => r.id)
-                  const items = reservations.map((r) => {
-                    const book = books.find((b) => b.id === r.bookId)
-                    const qty = r.qty || 1
-                    const pricePerUnit = book ? book.sellingPrice || 0 : 0
-                    const fullPrice = pricePerUnit * qty
-                    const deposit = r.deposit || 0
-                    const remaining = Math.max(fullPrice - deposit, 0)
-                    return {
-                      id: r.id,
-                      title: book?.title || '',
-                      qty,
-                      type: 'pickup',
-                      deposit,
-                      lineTotal: remaining,
-                    }
-                  })
-                  const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0)
-                  const transactionId = formatTransactionId(transactionCounter)
-                  const transactionDate = new Date()
-                  const pickupEntry = {
-                    id: transactionId,
-                    date: transactionDate.toISOString(),
-                    staffId: selectedStaffId,
-                    staffName: t(`staff.${selectedStaffId}`),
-                    student,
-                    items,
-                    subtotal,
-                    discount: 0,
-                    total: subtotal,
-                    costTotal: 0,
-                    netProfit: subtotal,
-                    receiptType: 'pickup',
-                    paymentMethod,
-                  }
-                  
-                  // Deduct from Wallet if Payment Method is Wallet
-                  // Note: 'paymentMethod' here is passed from prop, usually 'cash' default?
-                  // We need to allow selecting payment method in Pickup View too.
-                  // For now, let's assume if they have enough balance, we can deduct?
-                  // Or just respect 'paymentMethod' prop which might be default 'cash'.
-                  // The user said: "When I deposit book price in wallet, it must be deducted from any new operation".
-                  // So if student has balance, we should probably prioritize it?
-                  // Or let's just deduct if paymentMethod is wallet.
-                  // But we don't have a payment selector in Pickup View yet.
-                  // Let's AUTO-DEDUCT from wallet if balance > 0, regardless?
-                  // No, that's dangerous.
-                  
-                  // Let's add simple logic: If student has balance >= total, deduct from wallet and mark as paid by wallet.
-                  if (student.balance >= subtotal) {
-                     setStudents(prev => prev.map(s => 
-                        s.id === student.id 
-                          ? { ...s, balance: (s.balance || 0) - subtotal } 
-                          : s
-                     ))
-                     pickupEntry.paymentMethod = 'wallet'
-                     const logEntry = {
-                        id: Date.now(),
-                        studentId: student.id,
-                        amount: -subtotal,
-                        type: 'pickup_wallet',
-                        date: new Date().toISOString(),
-                        description: `استلام حجز ${transactionId} من المحفظة`
+            <ReservationsView
+              variant="pickup"
+              t={t}
+              search={pickupSearch}
+              onSearchChange={setPickupSearch}
+              onOpenLegacy={() => legacyReservationModalHelpers.open()}
+            >
+                <PickupReservationContent
+                  t={t}
+                  locale={locale}
+                  pickupSearch={pickupSearch}
+                  students={students}
+                  books={books}
+                  pendingReservations={pendingReservations}
+                  salesHistory={salesHistory}
+                  formatCurrency={formatCurrency}
+                  onComplete={({ student, reservations }) => {
+                    const ids = reservations.map((r) => r.id)
+                    const items = reservations.map((r) => {
+                      const book = books.find((b) => b.id === r.bookId)
+                      const qty = r.qty || 1
+                      const pricePerUnit = book ? book.sellingPrice || 0 : 0
+                      const fullPrice = pricePerUnit * qty
+                      const deposit = r.deposit || 0
+                      const remaining = Math.max(fullPrice - deposit, 0)
+                      return {
+                        id: r.id,
+                        title: book?.title || '',
+                        qty,
+                        type: 'pickup',
+                        deposit,
+                        lineTotal: remaining,
                       }
-                      setWalletLog(prev => [logEntry, ...prev])
-                  } else {
-                     pickupEntry.paymentMethod = 'cash'
-                  }
-
-                  setSalesHistory((prev) => [pickupEntry, ...prev])
-                  setTransactionCounter((prev) => prev + 1)
-                  setLastTransaction(pickupEntry)
-                  // Stock was ALREADY deducted when reservation was made. 
-                  // So we DO NOT deduct again here.
-                  /*
-                  if (pickedBooks.length) {
-                    setBooks((prev) =>
-                      prev.map((book) => {
-                        const picked = pickedBooks.find((r) => r.bookId === book.id)
-                        if (!picked) return book
-                        const nextStock = Math.max((book.stock || 0) - picked.qty, 0)
-                        return { ...book, stock: nextStock }
-                      }),
-                    )
-                  }
-                  */
-                  setPendingReservations((prev) => prev.filter((r) => !ids.includes(r.id)))
-                  enqueueSync({
-                    type: 'transaction_create',
-                    payload: {
-                      studentId: student.id,
+                    })
+                    const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0)
+                    const transactionId = formatTransactionId(transactionCounter)
+                    const transactionDate = new Date()
+                    const pickupEntry = {
+                      id: transactionId,
+                      date: transactionDate.toISOString(),
+                      staffId: selectedStaffId,
+                      staffName: t(`staff.${selectedStaffId}`),
+                      student,
+                      items,
+                      subtotal,
                       discount: 0,
-                      staffName: selectedStaffId,
-                      items: reservations.map((r) => ({
-                        bookId: r.bookId,
-                        qty: r.qty || 1,
-                        reservationId: r.id,
-                      })),
-                    },
-                  })
-                  if (student.balance >= subtotal) {
+                      total: subtotal,
+                      costTotal: 0,
+                      netProfit: subtotal,
+                      receiptType: 'pickup',
+                      paymentMethod,
+                    }
+
+                    // Deduct from Wallet if Payment Method is Wallet
+                    // Note: 'paymentMethod' here is passed from prop, usually 'cash' default?
+                    // We need to allow selecting payment method in Pickup View too.
+                    // For now, let's assume if they have enough balance, we can deduct?
+                    // Or just respect 'paymentMethod' prop which might be default 'cash'.
+                    // The user said: "When I deposit book price in wallet, it must be deducted from any new operation".
+                    // So if student has balance, we should probably prioritize it?
+                    // Or let's just deduct if paymentMethod is wallet.
+                    // But we don't have a payment selector in Pickup View yet.
+                    // Let's AUTO-DEDUCT from wallet if balance > 0, regardless?
+                    // No, that's dangerous.
+
+                    // Let's add simple logic: If student has balance >= total, deduct from wallet and mark as paid by wallet.
+                    if (student.balance >= subtotal) {
+                       setStudents(prev => prev.map(s => 
+                          s.id === student.id 
+                            ? { ...s, balance: (s.balance || 0) - subtotal } 
+                            : s
+                       ))
+                       pickupEntry.paymentMethod = 'wallet'
+                       const logEntry = {
+                          id: Date.now(),
+                          studentId: student.id,
+                          amount: -subtotal,
+                          type: 'pickup_wallet',
+                          date: new Date().toISOString(),
+                          description: `استلام حجز ${transactionId} من المحفظة`
+                        }
+                        setWalletLog(prev => [logEntry, ...prev])
+                    } else {
+                       pickupEntry.paymentMethod = 'cash'
+                    }
+
+                    setSalesHistory((prev) => [pickupEntry, ...prev])
+                    setTransactionCounter((prev) => prev + 1)
+                    setLastTransaction(pickupEntry)
+                    // Stock was ALREADY deducted when reservation was made. 
+                    // So we DO NOT deduct again here.
+                    /*
+                    if (pickedBooks.length) {
+                      setBooks((prev) =>
+                        prev.map((book) => {
+                          const picked = pickedBooks.find((r) => r.bookId === book.id)
+                          if (!picked) return book
+                          const nextStock = Math.max((book.stock || 0) - picked.qty, 0)
+                          return { ...book, stock: nextStock }
+                        }),
+                      )
+                    }
+                    */
+                    setPendingReservations((prev) => prev.filter((r) => !ids.includes(r.id)))
                     enqueueSync({
-                      type: 'student_balance_set',
+                      type: 'transaction_create',
                       payload: {
                         studentId: student.id,
-                        balance: (student.balance || 0) - subtotal,
-                        studentSnapshot: {
-                          ...student,
-                          balance: (student.balance || 0) - subtotal,
-                        },
+                        discount: 0,
+                        staffName: selectedStaffId,
+                        items: reservations.map((r) => ({
+                          bookId: r.bookId,
+                          qty: r.qty || 1,
+                          reservationId: r.id,
+                        })),
                       },
                     })
-                  }
-                  setActiveView('receipt')
-                }}
-              />
-            </div>
+                    if (student.balance >= subtotal) {
+                      enqueueSync(
+                        walletMutationOperation({
+                          studentId: student.id,
+                          student,
+                          nextBalance: (student.balance || 0) - subtotal,
+                          entryType: 'pickup_wallet',
+                          amount: -subtotal,
+                          sourceType: 'pickup',
+                          sourceId: null,
+                          operationId: `wallet:pickup:${transactionId}`,
+                          actor: selectedStaffId,
+                          description: `استلام حجز ${transactionId} من المحفظة`,
+                          ledgerEnabled: isWalletLedgerEnabled,
+                        }),
+                      )
+                    }
+                    setActiveView('receipt')
+                  }}
+                />
+            </ReservationsView>
           )}
 
           {activeView === 'cancelReservation' && (
-            <div className="rounded-3xl bg-white p-10 text-center shadow">
-              <PackageX className="mx-auto h-12 w-12 text-amber-500" />
-              <h3 className="mt-4 text-lg font-semibold">{t('nav.cancelReservation')}</h3>
-              <p className="mt-2 text-sm text-slate-500">{t('labels.searchByTxOrPhone')}</p>
-              <input
-                type="text"
-                value={cancelSearch}
-                onChange={(e) => setCancelSearch(e.target.value)}
-                placeholder="ED-0001 أو الاسم أو الهاتف"
-                className="mt-4 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-              />
-              <CancelReservationContent
-                t={t}
-                locale={locale}
-                cancelSearch={cancelSearch}
-                students={students}
-                books={books}
-                pendingReservations={pendingReservations}
-                salesHistory={salesHistory}
-                formatCurrency={formatCurrency}
-                onComplete={({ student, reservations, totalRefund, refundMethod }) => {
-                  const ids = reservations.map((r) => r.id)
-                  const toCancel = pendingReservations.filter((r) => ids.includes(r.id))
-                  setPendingReservations((prev) => prev.filter((r) => !ids.includes(r.id)))
-                  setCancelledReservations((prev) => [...prev, ...toCancel])
-                  
-                  // Restore Stock
-                  const cancelledItems = toCancel.map(r => ({ bookId: r.bookId, qty: r.qty || 1 }))
-                  setBooks(prev => prev.map(book => {
-                     const item = cancelledItems.find(i => i.bookId === book.id)
-                     if (!item) return book
-                     return { ...book, stock: (book.stock || 0) + item.qty }
-                  }))
+            <ReservationsView
+              variant="cancel"
+              t={t}
+              search={cancelSearch}
+              onSearchChange={setCancelSearch}
+            >
+                <CancelReservationContent
+                  t={t}
+                  locale={locale}
+                  cancelSearch={cancelSearch}
+                  students={students}
+                  books={books}
+                  pendingReservations={pendingReservations}
+                  salesHistory={salesHistory}
+                  formatCurrency={formatCurrency}
+                  onComplete={({ student, reservations, totalRefund, refundMethod }) => {
+                    const ids = reservations.map((r) => r.id)
+                    const toCancel = pendingReservations.filter((r) => ids.includes(r.id))
+                    setPendingReservations((prev) => prev.filter((r) => !ids.includes(r.id)))
+                    setCancelledReservations((prev) => [...prev, ...toCancel])
 
-                  if (refundMethod === 'wallet') {
-                     // Refund to Wallet
-                     setStudents(prev => prev.map(s => 
-                        s.id === student.id 
-                          ? { ...s, balance: (s.balance || 0) + totalRefund } 
-                          : s
-                     ))
-                     const logEntry = {
-                        id: Date.now(),
-                        studentId: student.id,
-                        amount: totalRefund,
-                        type: 'refund_cancel_reservation',
-                        date: new Date().toISOString(),
-                        description: `استرداد حجز للمحفظة`
-                      }
-                      setWalletLog(prev => [logEntry, ...prev])
-                  } else {
-                     // Refund Cash (Withdrawal)
-                     setWithdrawals((prev) => [
-                        ...prev,
-                        {
+                    // Restore Stock
+                    const cancelledItems = toCancel.map(r => ({ bookId: r.bookId, qty: r.qty || 1 }))
+                    setBooks(prev => prev.map(book => {
+                       const item = cancelledItems.find(i => i.bookId === book.id)
+                       if (!item) return book
+                       return { ...book, stock: (book.stock || 0) + item.qty }
+                    }))
+
+                    if (refundMethod === 'wallet') {
+                       // Refund to Wallet
+                       setStudents(prev => prev.map(s => 
+                          s.id === student.id 
+                            ? { ...s, balance: (s.balance || 0) + totalRefund } 
+                            : s
+                       ))
+                       const logEntry = {
                           id: Date.now(),
-                          amount: -totalRefund,
-                          reason: 'سحب حجز (كاش)',
-                          staffId: selectedStaffId,
+                          studentId: student.id,
+                          amount: totalRefund,
+                          type: 'refund_cancel_reservation',
                           date: new Date().toISOString(),
-                        },
-                      ])
-                  }
-                  if (refundMethod === 'cash') {
-                    for (const r of reservations) {
-                      enqueueSync({
-                        type: 'reservation_cancel',
-                        payload: {
-                          reservationId: r.id,
-                          refundMethod: 'cash',
-                          refundAmount: r.deposit || 0,
-                          staffName: selectedStaffId,
-                          studentId: student.id,
-                        },
-                      })
+                          description: `استرداد حجز للمحفظة`
+                        }
+                        setWalletLog(prev => [logEntry, ...prev])
+                    } else {
+                       // Refund Cash (Withdrawal)
+                       setWithdrawals((prev) => [
+                          ...prev,
+                          {
+                            id: Date.now(),
+                            amount: -totalRefund,
+                            reason: 'سحب حجز (كاش)',
+                            staffId: selectedStaffId,
+                            date: new Date().toISOString(),
+                          },
+                        ])
                     }
-                  } else {
-                    for (const r of reservations) {
-                      enqueueSync({
-                        type: 'reservation_cancel',
-                        payload: {
-                          reservationId: r.id,
-                          refundMethod: 'none',
-                          refundAmount: 0,
-                          staffName: selectedStaffId,
+                    if (refundMethod === 'cash') {
+                      for (const r of reservations) {
+                        enqueueSync({
+                          type: 'reservation_cancel',
+                          payload: {
+                            reservationId: r.id,
+                            refundMethod: 'cash',
+                            refundAmount: r.deposit || 0,
+                            staffName: selectedStaffId,
+                            studentId: student.id,
+                          },
+                        })
+                      }
+                    } else {
+                      for (const r of reservations) {
+                        enqueueSync({
+                          type: 'reservation_cancel',
+                          payload: {
+                            reservationId: r.id,
+                            refundMethod: 'none',
+                            refundAmount: 0,
+                            staffName: selectedStaffId,
+                            studentId: student.id,
+                          },
+                        })
+                      }
+                      enqueueSync(
+                        walletMutationOperation({
                           studentId: student.id,
-                        },
-                      })
+                          student,
+                          nextBalance: (student.balance || 0) + totalRefund,
+                          entryType: 'refund_cancel_reservation',
+                          amount: totalRefund,
+                          sourceType: 'reservation_cancel',
+                          sourceId: null,
+                          operationId: `wallet:cancel:${transactionId}`,
+                          actor: selectedStaffId,
+                          description: `استرداد حجز للمحفظة`,
+                          ledgerEnabled: isWalletLedgerEnabled,
+                        }),
+                      )
                     }
-                    enqueueSync({
-                      type: 'student_balance_set',
-                      payload: {
-                        studentId: student.id,
-                        balance: (student.balance || 0) + totalRefund,
-                        studentSnapshot: {
-                          ...student,
-                          balance: (student.balance || 0) + totalRefund,
-                        },
-                      },
-                    })
-                  }
 
-                  const items = reservations.map((r) => {
-                    const book = books.find((b) => b.id === r.bookId)
-                    return {
-                      id: r.id,
-                      title: book?.title || '',
-                      qty: r.qty || 1,
-                      type: 'cancel',
-                      lineTotal: r.deposit || 0,
+                    const items = reservations.map((r) => {
+                      const book = books.find((b) => b.id === r.bookId)
+                      return {
+                        id: r.id,
+                        title: book?.title || '',
+                        qty: r.qty || 1,
+                        type: 'cancel',
+                        lineTotal: r.deposit || 0,
+                      }
+                    })
+                    const transactionId = formatTransactionId(transactionCounter)
+                    const transactionDate = new Date()
+                    const cancelEntry = {
+                      id: transactionId,
+                      date: transactionDate.toISOString(),
+                      staffId: selectedStaffId,
+                      staffName: t(`staff.${selectedStaffId}`),
+                      student,
+                      items,
+                      subtotal: totalRefund,
+                      discount: 0,
+                      total: totalRefund,
+                      costTotal: 0,
+                      netProfit: -totalRefund,
+                      receiptType: 'cancel',
+                      paymentMethod,
                     }
-                  })
-                  const transactionId = formatTransactionId(transactionCounter)
-                  const transactionDate = new Date()
-                  const cancelEntry = {
-                    id: transactionId,
-                    date: transactionDate.toISOString(),
-                    staffId: selectedStaffId,
-                    staffName: t(`staff.${selectedStaffId}`),
-                    student,
-                    items,
-                    subtotal: totalRefund,
-                    discount: 0,
-                    total: totalRefund,
-                    costTotal: 0,
-                    netProfit: -totalRefund,
-                    receiptType: 'cancel',
-                    paymentMethod,
-                  }
-                  setLastTransaction(cancelEntry)
-                  setActiveView('receipt')
-                }}
-              />
-            </div>
+                    setLastTransaction(cancelEntry)
+                    setActiveView('receipt')
+                  }}
+                />
+            </ReservationsView>
           )}
 
           {activeView === 'returns' && (
-            <div className="rounded-3xl bg-white p-10 text-center shadow">
-              <ArrowUpDown className="mx-auto h-12 w-12 text-rose-500" />
-              <h3 className="mt-4 text-lg font-semibold">مرتجع فاتورة</h3>
-              <p className="mt-2 text-sm text-slate-500">ابحث برقم العملية أو اسم الطالب</p>
-              <ReturnSaleContent
-                t={t}
-                locale={locale}
-                salesHistory={salesHistory}
-                formatCurrency={formatCurrency}
-                selectedStaffId={selectedStaffId}
-                paymentMethod={paymentMethod}
-                onReturnComplete={(entry, affectedBooks, isWalletRefund) => {
-                  setSalesHistory((prev) => [entry, ...prev])
-                  setTransactionCounter((prev) => prev + 1)
-                  setLastTransaction(entry)
-                  if (affectedBooks.length) {
-                    setBooks((prev) =>
-                      prev.map((book) => {
-                        const returned = affectedBooks.find((r) => r.bookId === book.id)
-                        if (!returned) return book
-                        const nextStock = (book.stock || 0) + returned.qty
-                        return { ...book, stock: nextStock }
-                      }),
-                    )
-                  }
-                  
-                  if (isWalletRefund && entry.student?.id) {
-                     setStudents(prev => prev.map(s => 
-                        s.id === entry.student.id 
-                          ? { ...s, balance: (s.balance || 0) + Math.abs(entry.total) } 
-                          : s
-                     ))
-                     const logEntry = {
-                        id: Date.now(),
-                        studentId: entry.student.id,
-                        amount: Math.abs(entry.total),
-                        type: 'refund_return_sale',
-                        date: new Date().toISOString(),
-                        description: `استرداد فاتورة ${entry.originalTransactionId} للمحفظة`
-                      }
-                      setWalletLog(prev => [logEntry, ...prev])
-                  }
+            <ReturnsView>
+                <ReturnSaleContent
+                  t={t}
+                  locale={locale}
+                  salesHistory={salesHistory}
+                  formatCurrency={formatCurrency}
+                  selectedStaffId={selectedStaffId}
+                  paymentMethod={paymentMethod}
+                  onReturnComplete={(entry, affectedBooks, isWalletRefund) => {
+                    setSalesHistory((prev) => [entry, ...prev])
+                    setTransactionCounter((prev) => prev + 1)
+                    setLastTransaction(entry)
+                    if (affectedBooks.length) {
+                      setBooks((prev) =>
+                        prev.map((book) => {
+                          const returned = affectedBooks.find((r) => r.bookId === book.id)
+                          if (!returned) return book
+                          const nextStock = (book.stock || 0) + returned.qty
+                          return { ...book, stock: nextStock }
+                        }),
+                      )
+                    }
 
-                  setActiveView('receipt')
-                }}
-              />
-            </div>
+                    if (isWalletRefund && entry.student?.id) {
+                       setStudents(prev => prev.map(s =>
+                          s.id === entry.student.id
+                            ? { ...s, balance: (s.balance || 0) + Math.abs(entry.total) }
+                            : s
+                       ))
+                       const logEntry = {
+                          id: Date.now(),
+                          studentId: entry.student.id,
+                          amount: Math.abs(entry.total),
+                          type: 'refund_return_sale',
+                          date: new Date().toISOString(),
+                          description: `استرداد فاتورة ${entry.originalTransactionId} للمحفظة`
+                        }
+                        setWalletLog(prev => [logEntry, ...prev])
+                        enqueueSync(
+                          walletMutationOperation({
+                            studentId: entry.student.id,
+                            student: entry.student,
+                            nextBalance: (entry.student.balance || 0) + Math.abs(entry.total),
+                            entryType: 'refund_return_sale',
+                            amount: Math.abs(entry.total),
+                            sourceType: 'return',
+                            sourceId: null,
+                            operationId: `wallet:return:${entry.originalTransactionId || entry.id}`,
+                            actor: selectedStaffId,
+                            description: `استرداد فاتورة ${entry.originalTransactionId} للمحفظة`,
+                            ledgerEnabled: isWalletLedgerEnabled,
+                          }),
+                        )
+                    }
+
+                    setActiveView('receipt')
+                  }}
+                />
+            </ReturnsView>
           )}
 
           {activeView === 'receipt' && (
@@ -2952,7 +1841,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    setCartItems([])
+                    clearCart()
                     setDiscount(0)
                     setSelectedStudentId('')
                     setQuickStudent({
@@ -3050,363 +1939,81 @@ function App() {
           )}
 
           {activeView === 'emergency' && (
-            <div className="rounded-3xl bg-white p-6 shadow">
-              <div className="flex items-center gap-3">
-                <ShieldAlert className="h-6 w-6 text-amber-500" />
-                <div>
-                  <h3 className="text-lg font-semibold">{t('sections.emergency')}</h3>
-                  <p className="text-sm text-slate-500">{t('labels.emergencyHint')}</p>
-                </div>
-              </div>
-              <form onSubmit={handleEmergencySubmit} className="mt-6 grid gap-4">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <InputField
-                    name="emergencyAmount"
-                    label={t('fields.amount')}
-                    type="number"
-                    min="1"
-                    value={emergencyForm.amount}
-                    onChange={(event) =>
-                      setEmergencyForm((prev) => ({ ...prev, amount: event.target.value }))
-                    }
-                    required
-                  />
-                  <SelectField
-                    label={t('fields.staff')}
-                    value={emergencyForm.staffId || selectedStaffId}
-                    onChange={(event) =>
-                      setEmergencyForm((prev) => ({ ...prev, staffId: event.target.value }))
-                    }
-                    options={staffMembers.map((member) => ({
-                      value: member.id,
-                      label: t(`staff.${member.id}`),
-                    }))}
-                  />
-                </div>
-                <InputField
-                  name="emergencyReason"
-                  label={t('fields.reason')}
-                  value={emergencyForm.reason}
-                  onChange={(event) =>
-                    setEmergencyForm((prev) => ({ ...prev, reason: event.target.value }))
-                  }
-                  required
-                />
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  {t('labels.safeWarning')}
-                </div>
-                <button
-                  type="submit"
-                  className="flex items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-white"
-                >
-                  {t('actions.recordWithdrawal')}
-                </button>
-              </form>
-              {withdrawals.length > 0 && (
-                <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <h4 className="text-sm font-semibold text-slate-700">{t('labels.recentWithdrawals')}</h4>
-                  <div className="mt-3 space-y-2 text-xs text-slate-500">
-                    {withdrawals.slice(0, 4).map((entry) => (
-                      <div key={entry.id} className="flex items-center justify-between">
-                        <span>
-                          {t(`staff.${entry.staffId}`)} · {entry.reason}
-                        </span>
-                        <span className="font-semibold text-slate-700">
-                          {formatCurrency(locale, entry.amount)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <EmergencyView
+              t={t}
+              locale={locale}
+              staffMembers={staffMembers}
+              form={emergencyForm}
+              onFormChange={setEmergencyForm}
+              withdrawals={withdrawals}
+              formatCurrency={formatCurrency}
+              defaultStaffId={selectedStaffId}
+              onSubmit={handleEmergencySubmit}
+            />
           )}
 
           {activeView === 'inventory' && (
-            <div className="rounded-3xl bg-white p-6 shadow">
-              <div className="flex items-center gap-3">
-                <ClipboardList className="h-6 w-6 text-brand-600" />
-                <div>
-                  <h3 className="text-lg font-semibold">{t('sections.inventory')}</h3>
-                  <p className="text-sm text-slate-500">{t('labels.inventoryHint')}</p>
-                </div>
-              </div>
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <StatCard title={t('labels.safeBalance')} value={formatCurrency(locale, safeBalance)} />
-                <StatCard title={t('labels.salesTotal')} value={formatCurrency(locale, totalSales)} />
-                <StatCard
-                  title={t('labels.withdrawalsTotal')}
-                  value={formatCurrency(locale, totalWithdrawals)}
-                />
-              </div>
-              <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-sm font-semibold text-slate-700">{t('labels.auditSession')}</h4>
-                    <p className="text-xs text-slate-500">{t('labels.auditHint')}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-xs text-slate-600">
-                      <p className="mb-1">الرصيد الفعلي في الدرج</p>
-                      <input
-                        type="number"
-                        min="0"
-                        value={auditActualCash}
-                        onChange={(event) => setAuditActualCash(event.target.value)}
-                        className="w-32 rounded-xl border border-slate-300 bg-white px-2 py-1 text-right text-xs"
-                      />
-                    </div>
-                    <SelectField
-                      label={t('fields.auditStaff')}
-                      value={auditStaffId}
-                      onChange={(event) => setAuditStaffId(event.target.value)}
-                      options={auditStaffMembers.map((member) => ({
-                        value: member.id,
-                        label: t(`staff.${member.id}`),
-                      }))}
-                      compact
-                    />
-                    <button
-                      type="button"
-                      onClick={handleAudit}
-                      disabled={!['heba', 'maryam'].includes(auditStaffId)}
-                      className="flex items-center gap-2 rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                    >
-                      {t('actions.audit')}
-                    </button>
-                  </div>
-                </div>
-                {auditLog.length > 0 && (
-                  <div className="mt-4 space-y-2 text-xs text-slate-500">
-                    {auditLog.slice(0, 3).map((entry) => (
-                      <div key={entry.id} className="rounded-xl border border-slate-100 bg-white px-3 py-2">
-                        <div className="flex items-center justify-between">
-                          <span>
-                            {t(`staff.${entry.staffId}`)} ·{' '}
-                            {new Date(entry.date).toLocaleString(locale)}
-                          </span>
-                          <span className="font-semibold text-slate-700">
-                            {formatCurrency(locale, entry.safeBalance)}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between text-[11px]">
-                          <span>الرصيد المتوقع</span>
-                          <span>{formatCurrency(locale, entry.safeBalance)}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span>الرصيد الفعلي</span>
-                          <span>{formatCurrency(locale, entry.actualCash || 0)}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span>الفرق</span>
-                          <span className={entry.diff === 0 ? 'text-emerald-600' : entry.diff > 0 ? 'text-amber-600' : 'text-rose-600'}>
-                            {formatCurrency(locale, entry.diff || 0)}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            <InventoryAuditView
+              t={t}
+              locale={locale}
+              safeBalance={safeBalance}
+              totalSales={totalSales}
+              totalWithdrawals={totalWithdrawals}
+              auditActualCash={auditActualCash}
+              onActualCashChange={setAuditActualCash}
+              auditStaffId={auditStaffId}
+              onAuditStaffChange={setAuditStaffId}
+              auditStaffMembers={auditStaffMembers}
+              onAudit={handleAudit}
+              auditLog={auditLog}
+              formatCurrency={formatCurrency}
+            />
           )}
 
           {activeView === 'admin' && (
-            <div className="rounded-3xl bg-white p-6 shadow">
-              {!adminUnlocked ? (
-                <div className="max-w-lg space-y-4">
-                  <div className="flex items-center gap-3">
-                    <Lock className="h-6 w-6 text-brand-600" />
-                    <div>
-                      <h3 className="text-lg font-semibold">{t('sections.admin')}</h3>
-                      <p className="text-sm text-slate-500">{t('labels.adminHint')}</p>
-                    </div>
-                  </div>
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault()
-                      if (adminPassword === 'educon_admin') {
-                        setAdminUnlocked(true)
-                        setAdminPassword('')
-                      }
-                    }}
-                    className="space-y-3"
-                  >
-                    <InputField
-                      name="adminPassword"
-                      label={t('fields.password')}
-                      type="password"
-                      value={adminPassword}
-                      onChange={(event) => setAdminPassword(event.target.value)}
-                      required
-                    />
-                    <button
-                      type="submit"
-                      className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-                    >
-                      {t('actions.unlock')}
-                    </button>
-                  </form>
-                </div>
-              ) : (
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-lg font-semibold">{t('sections.admin')}</h3>
-                      <p className="text-sm text-slate-500">{t('labels.adminMetrics')}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={exportToExcel}
-                        className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-                      >
-                        <FileSpreadsheet className="h-4 w-4" />
-                        {t('actions.exportExcel')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAdminUnlocked(false)}
-                        className="rounded-2xl border border-slate-200 px-4 py-2 text-sm"
-                      >
-                        {t('actions.lock')}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                    <label className="block text-sm font-semibold text-slate-700">{(t('labels.customReceiptFooter') || 'نص إضافي للإيصالات')}</label>
-                    <textarea
-                      value={adminCustomFooter}
-                      onChange={(e) => setAdminCustomFooter(e.target.value)}
-                      placeholder="سياسات، عروض، إيفنتات..."
-                      rows={3}
-                      className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
-                    />
-                  </div>
-                  <div className="mt-6 grid gap-4 md:grid-cols-3">
-                    <StatCard title={t('labels.salesTotal')} value={formatCurrency(locale, totalSales)} />
-                    <StatCard title={t('labels.costTotal')} value={formatCurrency(locale, totalCost)} />
-                    <StatCard title={t('labels.netProfit')} value={formatCurrency(locale, totalNet)} />
-                  </div>
-                  <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                    <h4 className="text-sm font-semibold text-slate-700">{t('labels.performance')}</h4>
-                    <div className="mt-4 space-y-3">
-                      <MetricBar
-                        label={t('labels.salesTotal')}
-                        value={totalSales}
-                        valueLabel={formatCurrency(locale, totalSales)}
-                        max={chartMax}
-                        color="bg-emerald-500"
-                      />
-                      <MetricBar
-                        label={t('labels.costTotal')}
-                        value={totalCost}
-                        valueLabel={formatCurrency(locale, totalCost)}
-                        max={chartMax}
-                        color="bg-amber-500"
-                      />
-                      <MetricBar
-                        label={t('labels.netProfit')}
-                        value={totalNet}
-                        valueLabel={formatCurrency(locale, totalNet)}
-                        max={chartMax}
-                        color="bg-sky-500"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                    <h4 className="text-sm font-semibold text-slate-700">{t('labels.recentTransactions')}</h4>
-                    <div className="mt-3 space-y-2 text-xs text-slate-500">
-                      {salesHistory.slice(0, 5).map((entry) => (
-                        <div key={entry.id} className="flex items-center justify-between">
-                          <span>
-                            {entry.id} · {entry.student?.name || t('labels.walkIn')} ·{' '}
-                            {t(`staff.${entry.staffId}`)}
-                          </span>
-                          <span className="font-semibold text-slate-700">
-                            {formatCurrency(locale, entry.total)}
-                          </span>
-                        </div>
-                      ))}
-                      {salesHistory.length === 0 && (
-                        <p className="text-xs text-slate-400">{t('empty.sales')}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+            <AdminView
+              t={t}
+              locale={locale}
+              customFooter={adminCustomFooter}
+              onCustomFooterChange={setAdminCustomFooter}
+              onExport={exportToExcel}
+              adminUnlocked={adminUnlocked}
+              adminPassword={adminPassword}
+              onPasswordChange={setAdminPassword}
+              onUnlock={handleAdminUnlock}
+              onLock={() => setAdminUnlocked(false)}
+              totalSales={totalSales}
+              totalCost={totalCost}
+              totalNet={totalNet}
+              chartMax={chartMax}
+              salesHistory={salesHistory}
+              formatCurrency={formatCurrency}
+            />
           )}
 
           {activeView === 'reports' && (
-            <div className="rounded-3xl bg-white p-10 shadow">
-              <div className="flex items-center gap-3">
-                <BarChart3 className="h-8 w-8 text-brand-600" />
-                <div>
-                  <h3 className="text-lg font-semibold">{t('nav.reports')}</h3>
-                  <p className="text-sm text-slate-500">ملخص سريع للفترة الحالية (من آخر جرد حتى الآن).</p>
-                </div>
-              </div>
-              <div className="mt-6 grid gap-4 md:grid-cols-4">
-                <StatCard title="عدد العمليات" value={salesHistory.length} />
-                <StatCard title="إجمالي المبيعات" value={formatCurrency(locale, totalSales)} />
-                <StatCard title="إجمالي السحوبات" value={formatCurrency(locale, totalWithdrawals)} />
-                <StatCard title="رصيد الخزنة" value={formatCurrency(locale, safeBalance)} />
-              </div>
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-right text-xs text-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-800">أنواع العمليات</h4>
-                  <div className="mt-3 space-y-1">
-                    <p>بيع: {typeCounts.sale || 0}</p>
-                    <p>حجز: {typeCounts.reservation || 0}</p>
-                    <p>استلام حجز: {typeCounts.pickup || 0}</p>
-                    <p>سحب حجز: {typeCounts.cancel || 0}</p>
-                    <p>مرتجع: {typeCounts.return || 0}</p>
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-right text-xs text-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-800">أفضل الكتب مبيعًا (الفترة الحالية)</h4>
-                  <div className="mt-3 space-y-1">
-                    {books
-                      .map((book) => {
-                        const soldQty = salesHistory.reduce((sum, entry) => {
-                          const items = Array.isArray(entry.items) ? entry.items : []
-                          const fromSale = items.filter((item) => item.id === book.id && (item.type === 'sale' || item.type === 'pickup'))
-                          return (
-                            sum +
-                            fromSale.reduce((s, item) => s + (item.qty || 1), 0)
-                          )
-                        }, 0)
-                        return { book, soldQty }
-                      })
-                      .filter((row) => row.soldQty > 0)
-                      .sort((a, b) => b.soldQty - a.soldQty)
-                      .slice(0, 5)
-                      .map((row) => (
-                        <div key={row.book.id} className="flex items-center justify-between">
-                          <span>{row.book.title}</span>
-                          <span className="font-semibold">{row.soldQty}</span>
-                        </div>
-                      ))}
-                    {books.every((book) =>
-                      salesHistory.every((entry) =>
-                        !(Array.isArray(entry.items) && entry.items.some((item) => item.id === book.id)),
-                      ),
-                    ) && <p className="text-slate-400">لا توجد كتب مباعة في هذه الفترة.</p>}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <ReportsView
+              t={t}
+              locale={locale}
+              salesHistory={salesHistory}
+              totalSales={totalSales}
+              totalWithdrawals={totalWithdrawals}
+              safeBalance={safeBalance}
+              typeCounts={typeCounts}
+              topBooksRows={topBooksRows}
+              noSoldBooks={noSoldBooks}
+              formatCurrency={formatCurrency}
+            />
           )}
         </main>
       </div>
 
       {bookModal.open && (
-        <Modal onClose={() => setBookModal({ open: false, mode: 'add', data: null })}>
+        <Modal onClose={() => bookModalHelpers.close()}>
           <form onSubmit={saveBook} className="space-y-4">
             <ModalHeader
               title={bookModal.mode === 'edit' ? t('actions.edit') : t('actions.add')}
-              onClose={() => setBookModal({ open: false, mode: 'add', data: null })}
+              onClose={() => bookModalHelpers.close()}
             />
             <InputField
               name="title"
@@ -3476,11 +2083,11 @@ function App() {
       )}
 
       {barcodeModal.open && (
-        <Modal onClose={() => setBarcodeModal({ open: false, book: null })}>
+        <Modal onClose={() => barcodeModalHelpers.close()}>
           <div className="space-y-4">
             <ModalHeader
               title={t('labels.barcodePreview')}
-              onClose={() => setBarcodeModal({ open: false, book: null })}
+              onClose={() => barcodeModalHelpers.close()}
             />
             <div className="flex items-center justify-center">
               <div className="w-64 rounded-2xl border border-slate-200 bg-white p-4 text-center">
@@ -3505,7 +2112,7 @@ function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setBarcodeModal({ open: false, book: null })}
+                onClick={() => barcodeModalHelpers.close()}
                 className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
               >
                 {t('actions.close')}
@@ -3516,11 +2123,11 @@ function App() {
       )}
 
       {studentModal.open && (
-        <Modal onClose={() => setStudentModal({ open: false, mode: 'add', data: null })}>
+        <Modal onClose={() => studentModalHelpers.close()}>
           <form onSubmit={saveStudent} className="space-y-4">
             <ModalHeader
               title={studentModal.mode === 'edit' ? t('actions.edit') : t('actions.add')}
-              onClose={() => setStudentModal({ open: false, mode: 'add', data: null })}
+              onClose={() => studentModalHelpers.close()}
             />
             <InputField
               name="name"
@@ -3576,7 +2183,7 @@ function App() {
           books={books}
           walletLog={walletLog}
           formatCurrency={formatCurrency}
-          onClose={() => setStudentDetailsModal({ open: false, student: null })}
+          onClose={() => studentDetailsModalHelpers.close()}
           onPickup={({ student, reservations }) => {
             // Re-use logic from PickupReservationContent via a wrapper or direct call
             // Ideally we should extract the pickup logic to a shared function "handlePickup"
@@ -3626,6 +2233,41 @@ function App() {
               receiptType: 'pickup',
               paymentMethod: 'cash', // Default to cash in modal for now
             }
+            // Mirror ReservationsView: allow paying the pickup from the wallet
+            // when the student has sufficient balance. This closes the offline
+            // persistence gap for the student-details modal.
+            if (student.balance >= subtotal) {
+              setStudents((prev) => prev.map((s) =>
+                s.id === student.id
+                  ? { ...s, balance: (s.balance || 0) - subtotal }
+                  : s,
+              ))
+              pickupEntry.paymentMethod = 'wallet'
+              const logEntry = {
+                id: Date.now(),
+                studentId: student.id,
+                amount: -subtotal,
+                type: 'pickup_wallet',
+                date: new Date().toISOString(),
+                description: `استلام حجز ${transactionId} من المحفظة`,
+              }
+              setWalletLog((prev) => [logEntry, ...prev])
+              enqueueSync(
+                walletMutationOperation({
+                  studentId: student.id,
+                  student,
+                  nextBalance: (student.balance || 0) - subtotal,
+                  entryType: 'pickup_wallet',
+                  amount: -subtotal,
+                  sourceType: 'pickup',
+                  sourceId: null,
+                  operationId: `wallet:pickup:${transactionId}`,
+                  actor: selectedStaffId,
+                  description: `استلام حجز ${transactionId} من المحفظة`,
+                  ledgerEnabled: isWalletLedgerEnabled,
+                }),
+              )
+            }
             setSalesHistory((prev) => [pickupEntry, ...prev])
             setTransactionCounter((prev) => prev + 1)
             setLastTransaction(pickupEntry)
@@ -3643,7 +2285,7 @@ function App() {
             }
             */
             setPendingReservations((prev) => prev.filter((r) => !ids.includes(r.id)))
-            setStudentDetailsModal({ open: false, student: null })
+            studentDetailsModalHelpers.close()
             setActiveView('receipt')
           }}
         />
@@ -3651,1144 +2293,12 @@ function App() {
 
       <LegacyReservationModal
         open={legacyReservationModal.open}
-        onClose={() => setLegacyReservationModal({ open: false })}
+        onClose={() => legacyReservationModalHelpers.close()}
         books={books}
         students={students}
         setStudents={setStudents}
         setPendingReservations={setPendingReservations}
       />
-    </div>
-  )
-}
-
-function findReservationsBySearch(search, students, pendingReservations, salesHistory) {
-  const term = (search || '').trim().toLowerCase()
-  if (!term) return { student: null, reservations: [], candidates: [] }
-
-  // 1. Try Transaction ID first
-  const txMatch = term.match(/^ed-?(\d+)$/i)
-  if (txMatch) {
-    const txId = `ED-${String(parseInt(txMatch[1], 10)).padStart(4, '0')}`
-    const sale = salesHistory.find((s) => s.id === txId)
-    if (sale?.student) {
-      const res = pendingReservations.filter((r) => r.studentId === sale.student.id)
-      return { student: sale.student, reservations: res, candidates: [] }
-    }
-  }
-
-  // 2. Find ALL matching students
-  const termDigits = term.replace(/\D/g, '')
-  const matchedStudents = students.filter((s) => {
-    const name = (s.name || '').toLowerCase()
-    const phoneDigits = (s.phone || '').replace(/\D/g, '')
-    const phoneExact = termDigits.length >= 7 && phoneDigits === termDigits
-    const phonePartial = termDigits.length >= 7 && phoneDigits.includes(termDigits)
-    const nameExact = name === term
-    const nameStarts = term.length >= 2 && name.startsWith(term)
-    const nameContains = term.length >= 3 && name.includes(term)
-    return phoneExact || phonePartial || nameExact || nameStarts || nameContains
-  })
-
-  if (matchedStudents.length === 0) return { student: null, reservations: [], candidates: [] }
-
-  const rank = (s) => {
-    const name = (s.name || '').toLowerCase()
-    const phoneDigits = (s.phone || '').replace(/\D/g, '')
-    const hasRes = pendingReservations.some((r) => r.studentId === s.id) ? 1 : 0
-    const phoneExact = termDigits.length >= 7 && phoneDigits === termDigits ? 1 : 0
-    const nameExact = name === term ? 1 : 0
-    const starts = name.startsWith(term) ? 1 : 0
-    return hasRes * 100 + phoneExact * 40 + nameExact * 30 + starts * 10
-  }
-  const sorted = [...matchedStudents].sort((a, b) => rank(b) - rank(a))
-  const candidates = sorted.filter((s) => pendingReservations.some((r) => r.studentId === s.id))
-  const exact = sorted.find((s) => {
-    const name = (s.name || '').toLowerCase()
-    const phoneDigits = (s.phone || '').replace(/\D/g, '')
-    return name === term || (termDigits.length >= 7 && phoneDigits === termDigits)
-  })
-  if (!exact && candidates.length > 1) {
-    return { student: null, reservations: [], candidates }
-  }
-  const bestMatch = exact || sorted[0]
-  const res = pendingReservations.filter((r) => r.studentId === bestMatch.id)
-  
-  return { student: bestMatch, reservations: res, candidates: [] }
-}
-
-function PickupReservationContent({ t, locale, pickupSearch, students, books, pendingReservations, salesHistory, formatCurrency, onComplete }) {
-  const { student, reservations, candidates } = useMemo(
-    () => findReservationsBySearch(pickupSearch, students, pendingReservations, salesHistory),
-    [pickupSearch, students, pendingReservations, salesHistory]
-  )
-  
-  // Calculate Balance (Debt/Credit)
-  const balance = student?.balance || 0
-
-  if (!pickupSearch.trim()) {
-    if (pendingReservations.length === 0) {
-      return <p className="mt-6 text-sm text-slate-500">لا يوجد حجوزات معلقة حاليًا.</p>
-    }
-    return (
-      <div className="mt-6 text-sm text-slate-500">
-        اكتب رقم العملية، اسم الطالب، أو رقم الهاتف لعرض حجوزاته المعلقة.
-      </div>
-    )
-  }
-  if (!student && candidates.length > 1) {
-    return (
-      <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
-        <p className="font-semibold text-amber-700">يوجد أكثر من طالب مطابق. اكتب اسمًا أكمل أو رقم هاتف أو رقم عملية.</p>
-        <div className="mt-2 space-y-1 text-slate-700">
-          {candidates.slice(0, 8).map((c) => (
-            <p key={c.id}>{c.name} · {c.phone || '--'}</p>
-          ))}
-        </div>
-      </div>
-    )
-  }
-  if (!student) return <p className="mt-6 text-sm text-slate-500">{t('empty.students')}</p>
-  if (reservations.length === 0) return <p className="mt-6 text-sm text-slate-500">لا يوجد حجوزات معلقة</p>
-  const totalDeposit = reservations.reduce((sum, r) => sum + (r.deposit || 0), 0)
-  const totalPrice = reservations.reduce((sum, r) => {
-    const book = books.find((b) => b.id === r.bookId)
-    const qty = r.qty || 1
-    return sum + (book ? (book.sellingPrice || 0) * qty : 0)
-  }, 0)
-  const remainingTotal = Math.max(totalPrice - totalDeposit, 0)
-  return (
-    <div className="mt-6 text-right">
-      <p className="font-semibold">{student.name}</p>
-      <p className="text-sm text-slate-500">{student.phone}</p>
-      <div className="mt-4 space-y-2">
-        {reservations.map((r) => {
-          const book = books.find((b) => b.id === r.bookId)
-          const qty = r.qty || 1
-          const price = book ? (book.sellingPrice || 0) * qty : 0
-          const remaining = Math.max(price - (r.deposit || 0), 0)
-          return (
-            <div key={r.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-              <p>{book?.title}</p>
-              <p className="text-xs text-slate-500">{r.transactionId || r.id}</p>
-              <div className="mt-1 text-xs text-slate-600">
-                <p>سعر الكتاب: {formatCurrency(locale, price)}</p>
-                <p>المدفوع حجزًا: {formatCurrency(locale, r.deposit || 0)}</p>
-                <p>المتبقي على هذا الحجز: {formatCurrency(locale, remaining)}</p>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="mt-4 space-y-1 text-sm">
-        <p className="font-semibold">إجمالي المدفوع حجزًا: {formatCurrency(locale, totalDeposit)}</p>
-        <p>إجمالي سعر الكتب: {formatCurrency(locale, totalPrice)}</p>
-        <p className="font-semibold text-emerald-700">المتبقي على الحساب الآن: {formatCurrency(locale, remainingTotal)}</p>
-        {balance > 0 && (
-           <p className="text-xs font-semibold text-brand-600">رصيد المحفظة المتاح: {formatCurrency(locale, balance)}</p>
-        )}
-        {remainingTotal > 0 && balance >= remainingTotal && (
-           <p className="text-xs text-emerald-600">سيتم الخصم من المحفظة تلقائيًا.</p>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={() => onComplete({ student, reservations })}
-        className="mt-4 rounded-2xl bg-brand-600 px-6 py-2 text-sm font-semibold text-white"
-      >
-        تأكيد الاستلام {remainingTotal > 0 && balance >= remainingTotal ? '(من المحفظة)' : ''}
-      </button>
-    </div>
-  )
-}
-
-function CancelReservationContent({ t, locale, cancelSearch, students, books, pendingReservations, salesHistory, formatCurrency, onComplete }) {
-  const { student, reservations, candidates } = useMemo(
-    () => findReservationsBySearch(cancelSearch, students, pendingReservations, salesHistory),
-    [cancelSearch, students, pendingReservations, salesHistory]
-  )
-  if (!cancelSearch.trim()) {
-    if (pendingReservations.length === 0) {
-      return <p className="mt-6 text-sm text-slate-500">لا يوجد حجوزات معلقة يمكن سحبها.</p>
-    }
-    return (
-      <div className="mt-6 text-sm text-slate-500">
-        اكتب رقم العملية، اسم الطالب، أو رقم الهاتف لعرض الحجوزات القابلة للسحب.
-      </div>
-    )
-  }
-  if (!student && candidates.length > 1) {
-    return (
-      <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
-        <p className="font-semibold text-amber-700">يوجد أكثر من طالب مطابق. اكتب اسمًا أكمل أو رقم هاتف أو رقم عملية.</p>
-        <div className="mt-2 space-y-1 text-slate-700">
-          {candidates.slice(0, 8).map((c) => (
-            <p key={c.id}>{c.name} · {c.phone || '--'}</p>
-          ))}
-        </div>
-      </div>
-    )
-  }
-  if (!student) return <p className="mt-6 text-sm text-slate-500">{t('empty.students')}</p>
-  if (reservations.length === 0) return <p className="mt-6 text-sm text-slate-500">لا يوجد حجوزات معلقة</p>
-  const totalRefund = reservations.reduce((sum, r) => sum + (r.deposit || 0), 0)
-  return (
-    <div className="mt-6 text-right">
-      <p className="font-semibold">{student.name}</p>
-      <p className="text-sm text-slate-500">{student.phone}</p>
-      <div className="mt-4 space-y-2">
-        {reservations.map((r) => {
-          const book = books.find((b) => b.id === r.bookId)
-          return (
-            <div key={r.id} className="rounded-xl border border-amber-100 bg-amber-50 p-3">
-              <p>{book?.title} - استرداد: {formatCurrency(locale, r.deposit)}</p>
-            </div>
-          )
-        })}
-      </div>
-      <p className="mt-4 font-semibold text-amber-700">إجمالي الاسترداد: {formatCurrency(locale, totalRefund)}</p>
-      <div className="mt-4 flex gap-3">
-        <button
-          type="button"
-          onClick={() => onComplete({ student, reservations, totalRefund, refundMethod: 'cash' })}
-          className="flex-1 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"
-        >
-          سحب كاش
-        </button>
-        <button
-          type="button"
-          onClick={() => onComplete({ student, reservations, totalRefund, refundMethod: 'wallet' })}
-          className="flex-1 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-        >
-          إيداع في المحفظة
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ReturnSaleContent({ t, locale, salesHistory, formatCurrency, selectedStaffId, paymentMethod, onReturnComplete }) {
-  const [search, setSearch] = useState('')
-  const term = search.trim().toLowerCase()
-  let sale = null
-  if (term) {
-    const txMatch = term.match(/^ed-?(\d+)$/i)
-    if (txMatch) {
-      const txId = `ED-${String(parseInt(txMatch[1], 10)).padStart(4, '0')}`
-      sale = salesHistory.find((s) => s.id === txId)
-    }
-    if (!sale) {
-      sale = salesHistory.find(
-        (s) =>
-          s.student?.name?.toLowerCase().includes(term) ||
-          term.includes(s.student?.name?.toLowerCase() || '') ||
-          (s.student?.phone && s.student.phone.replace(/\D/g, '').includes(term.replace(/\D/g, ''))),
-      )
-    }
-  }
-  if (!salesHistory.length) {
-    return (
-      <div className="mt-6 text-sm text-slate-500">لا يوجد مبيعات مسجلة بعد.</div>
-    )
-  }
-  return (
-    <div className="mt-6 space-y-4 text-right">
-      <input
-        type="text"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder="ED-0001 أو الاسم أو الهاتف"
-        className="w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-      />
-      {!term && <p className="text-sm text-slate-500">اكتب رقم الفاتورة أو اسم الطالب.</p>}
-      {term && !sale && <p className="text-sm text-slate-500">لم يتم العثور على فاتورة مطابقة.</p>}
-      {sale && (
-        <div className="mt-4 space-y-3 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm text-slate-800">
-          <p className="font-semibold">الطالب: {sale.student?.name || 'بدون اسم'}</p>
-          <p className="text-xs text-slate-600">رقم العملية الأصلية: {sale.id}</p>
-          <div className="mt-2 space-y-1">
-            {(sale.items || []).map((item) => (
-              <div key={item.id} className="flex items-center justify-between text-xs">
-                <span>
-                  {item.title} × {item.qty}
-                </span>
-                <span>{formatCurrency(locale, item.lineTotal)}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 flex items-center justify-between text-sm">
-            <span>إجمالي الفاتورة</span>
-            <span className="font-semibold text-rose-700">
-              {formatCurrency(locale, sale.total)}
-            </span>
-          </div>
-          <button
-        type="button"
-        onClick={() => {
-          const now = new Date()
-          const items = (sale.items || []).map((item) => ({
-            ...item,
-            type: 'return',
-            lineTotal: -Math.abs(item.lineTotal),
-          }))
-          const total = -Math.abs(sale.total)
-          const subtotal = -Math.abs(sale.subtotal || sale.total)
-          const entry = {
-            id: `RET-${sale.id}`,
-            date: now.toISOString(),
-            staffId: selectedStaffId,
-            staffName: t(`staff.${selectedStaffId}`),
-            student: sale.student,
-            items,
-            subtotal,
-            discount: 0,
-            total,
-            costTotal: -(sale.costTotal || 0),
-            netProfit: -(sale.netProfit || 0),
-            receiptType: 'return',
-            paymentMethod: sale.paymentMethod || paymentMethod,
-            originalTransactionId: sale.id,
-          }
-          const affectedBooks = (sale.items || [])
-            .filter((item) => item.type === 'sale' || item.type === 'pickup')
-            .map((item) => ({ bookId: item.id, qty: item.qty }))
-          onReturnComplete(entry, affectedBooks)
-        }}
-        className="mt-4 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white"
-      >
-        إرجاع الفاتورة بالكامل (كاش)
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          const now = new Date()
-          const items = (sale.items || []).map((item) => ({
-            ...item,
-            type: 'return',
-            lineTotal: -Math.abs(item.lineTotal),
-          }))
-          const total = -Math.abs(sale.total)
-          const subtotal = -Math.abs(sale.subtotal || sale.total)
-          const entry = {
-            id: `RET-${sale.id}`,
-            date: now.toISOString(),
-            staffId: selectedStaffId,
-            staffName: t(`staff.${selectedStaffId}`),
-            student: sale.student,
-            items,
-            subtotal,
-            discount: 0,
-            total,
-            costTotal: -(sale.costTotal || 0),
-            netProfit: -(sale.netProfit || 0),
-            receiptType: 'return',
-            paymentMethod: 'wallet',
-            originalTransactionId: sale.id,
-          }
-          const affectedBooks = (sale.items || [])
-            .filter((item) => item.type === 'sale' || item.type === 'pickup')
-            .map((item) => ({ bookId: item.id, qty: item.qty }))
-          onReturnComplete(entry, affectedBooks, true) // Pass true for walletRefund
-        }}
-        className="mt-2 w-full rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-      >
-        إرجاع الفاتورة للمحفظة
-      </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function LegacyReservationModal({ open, onClose, books, students, setStudents, setPendingReservations }) {
-  const defaultDate = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const [form, setForm] = useState({
-    studentName: '',
-    phone: '',
-    date: '',
-    notebookPage: '',
-    notebookLine: '',
-    bookId: '',
-    qty: '1',
-    deposit: '',
-  })
-  if (!open) return null
-  const effectiveDate = form.date || defaultDate
-  const effectiveQty = form.qty || '1'
-  const handleChange = (event) => {
-    const { name, value } = event.target
-    setForm((prev) => ({ ...prev, [name]: value }))
-  }
-  const handleSubmit = (event) => {
-    event.preventDefault()
-    const name = form.studentName.trim()
-    const phone = form.phone.trim()
-    if (!name) return
-    if (!form.bookId) return
-    const qty = Math.max(parseInt(effectiveQty, 10) || 1, 1)
-    const deposit = Number(form.deposit) || 0
-    let existingStudent = null
-    if (phone) {
-      const digits = phone.replace(/\D/g, '')
-      existingStudent = students.find((s) => s.phone && s.phone.replace(/\D/g, '') === digits)
-    }
-    if (!existingStudent) {
-      existingStudent = students.find((s) => s.name && s.name.trim() === name)
-    }
-    let studentId = existingStudent?.id
-    if (!studentId) {
-      studentId = Date.now()
-      const newStudent = {
-        id: studentId,
-        name,
-        phone,
-      }
-      setStudents((prev) => [...prev, newStudent])
-    }
-    const reservation = {
-      id: `LEG-${Date.now()}`,
-      transactionId: null,
-      studentId,
-      bookId: form.bookId,
-      qty,
-      status: 'pending',
-      deposit,
-      pendingArrival: true,
-      date: effectiveDate || new Date().toISOString(),
-      notebookPage: form.notebookPage || null,
-      notebookLine: form.notebookLine || null,
-      legacy: true,
-    }
-    setPendingReservations((prev) => [...prev, reservation])
-    onClose()
-  }
-  return (
-    <Modal open={open} onClose={onClose} title="حجز من الدفتر القديم">
-      <form onSubmit={handleSubmit} className="space-y-4 text-right">
-        <div className="grid gap-3 md:grid-cols-2">
-          <InputField
-            name="studentName"
-            label="اسم الطالب"
-            value={form.studentName}
-            onChange={handleChange}
-            required
-          />
-          <InputField
-            name="phone"
-            label="رقم الهاتف"
-            value={form.phone}
-            onChange={handleChange}
-          />
-        </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          <InputField
-            name="date"
-            label="تاريخ الحجز (من الدفتر)"
-            type="date"
-            value={effectiveDate}
-            onChange={handleChange}
-          />
-          <InputField
-            name="notebookPage"
-            label="رقم الصفحة"
-            value={form.notebookPage}
-            onChange={handleChange}
-          />
-          <InputField
-            name="notebookLine"
-            label="رقم السطر"
-            value={form.notebookLine}
-            onChange={handleChange}
-          />
-        </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          <SelectField
-            label="الكتاب"
-            value={form.bookId}
-            onChange={(event) => handleChange({ target: { name: 'bookId', value: event.target.value } })}
-            options={books.map((book) => ({ value: book.id, label: book.title }))}
-          />
-          <InputField
-            name="qty"
-            label="الكمية"
-            type="number"
-            min="1"
-            value={effectiveQty}
-            onChange={handleChange}
-          />
-          <InputField
-            name="deposit"
-            label="المبلغ المدفوع حجزًا"
-            type="number"
-            min="0"
-            value={form.deposit}
-            onChange={handleChange}
-          />
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-2xl border border-slate-200 px-4 py-2 text-sm"
-          >
-            إلغاء
-          </button>
-          <button
-            type="submit"
-            className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            حفظ الحجز
-          </button>
-        </div>
-      </form>
-    </Modal>
-  )
-}
-
-function ThermalReceipt({ t, locale, receipt, receiptLink, hasPhone, followsUs, onFollowsUsChange, whatsappGroupLink, channelLink, onPrint }) {
-  const dateLabel = receipt?.date ? new Date(receipt.date).toLocaleString(locale) : '--'
-  return (
-    <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow">
-      <div className="receipt-print-only print-area mx-auto space-y-4" style={{ width: '80mm' }} dir={locale.startsWith('ar') ? 'rtl' : 'ltr'}>
-        <div className="rounded-2xl bg-slate-900 px-4 py-3 text-center">
-          <img src={logoUrl} alt="Educon logo" className="mx-auto h-10 object-contain" />
-        </div>
-        <div className="text-center">
-          <p className="text-xs uppercase tracking-[0.3em] text-brand-600">{t('receipt.academy')}</p>
-          <h3 className="text-lg font-semibold">{t('receipt.title')}</h3>
-        </div>
-        <div className="space-y-1 text-xs text-slate-600">
-          {receipt?.receiptType && (
-            <div className="flex items-center justify-between">
-              <span>{t('labels.receiptType')}</span>
-              <span className="font-semibold text-slate-900">{receiptTypeLabels[receipt.receiptType] || receipt.receiptType}</span>
-            </div>
-          )}
-          <div className="flex items-center justify-between">
-            <span>{t('labels.transaction')}</span>
-            <span className="font-semibold text-slate-900">{receipt?.id}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>{t('labels.date')}</span>
-            <span className="font-semibold text-slate-900">{dateLabel}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>{t('labels.staff')}</span>
-            <span className="font-semibold text-slate-900">{receipt?.staffName}</span>
-          </div>
-        </div>
-        <div className="text-xs text-slate-600">
-          <p>
-            {t('labels.student')}: {receipt?.student?.name || '--'}
-          </p>
-          <p>
-            {t('fields.stage')}: {receipt?.student ? t(`stages.${receipt.student.stage}`) : '--'}
-          </p>
-          <p>
-            {t('fields.phone')}: {receipt?.student?.phone || '--'}
-          </p>
-        </div>
-        <div className="space-y-2 border-y border-dashed border-slate-200 py-4 text-xs">
-          {receipt?.items?.length === 0 ? (
-            <p className="text-slate-400">{t('empty.cart')}</p>
-          ) : (
-            receipt?.items?.map((item) => (
-              <div key={item.lineKey || `${item.type}:${item.id}`} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span>
-                    {item.title} · {item.qty}x
-                  </span>
-                  <span className="font-semibold">{formatCurrency(locale, item.lineTotal)}</span>
-                </div>
-                {item.type === 'reservation' && (
-                  <p className="text-[10px] text-sky-700">
-                    {t('labels.reservation')} · {t('labels.deposit')}: {item.deposit || 0}
-                    {item.pendingArrival ? ` · ${t('labels.pendingArrival')}` : ''}
-                  </p>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-        <div className="space-y-2 text-xs">
-          <div className="flex items-center justify-between">
-            <span>{t('labels.subtotal')}</span>
-            <span className="font-semibold">{formatCurrency(locale, receipt?.subtotal || 0)}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>{t('labels.discount')}</span>
-            <span className="font-semibold">{formatCurrency(locale, receipt?.discount || 0)}</span>
-          </div>
-          <div className="flex items-center justify-between text-sm font-semibold">
-            <span>{t('labels.total')}</span>
-            <span className="text-brand-700">{formatCurrency(locale, receipt?.total || 0)}</span>
-          </div>
-        </div>
-        <p className="text-center text-xs text-slate-400">{t('receipt.thanks')}</p>
-      </div>
-      <div className="no-print mt-5 space-y-3">
-        {onFollowsUsChange && (
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
-            <input
-              type="checkbox"
-              checked={followsUs}
-              onChange={(e) => onFollowsUsChange(e.target.checked)}
-              className="rounded border-slate-300"
-            />
-            {t('labels.followsUs')}
-          </label>
-        )}
-        <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => onPrint?.()}
-          className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-        >
-          {t('actions.print')}
-        </button>
-        {hasPhone && receiptLink ? (
-          <a
-            href={receiptLink}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            {t('actions.whatsappReceipt')}
-          </a>
-        ) : (
-          <span
-            className="flex cursor-not-allowed items-center gap-2 rounded-2xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-500"
-            title={t('labels.addPhoneFirst')}
-          >
-            {t('actions.whatsappReceipt')}
-            <span className="text-xs">({t('labels.addPhoneFirst')})</span>
-          </span>
-        )}
-        {whatsappGroupLink && (
-          <a
-            href={whatsappGroupLink}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-          >
-            {t('actions.whatsappGroup')}
-          </a>
-        )}
-        {channelLink && (
-          <a
-            href={channelLink}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-          >
-            {t('actions.whatsappChannel')}
-          </a>
-        )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function StudentsTable({ t, students, stageOptions, genderOptions, systemOptions, onAdd, onEdit, onView }) {
-  const [search, setSearch] = useState('')
-  const [filterStage, setFilterStage] = useState('')
-  const [filterSystem, setFilterSystem] = useState('')
-  const [filterGender, setFilterGender] = useState('')
-  const [sortBy, setSortBy] = useState('name')
-  const [sortDir, setSortDir] = useState('asc')
-
-  const filteredAndSorted = useMemo(() => {
-    let list = [...students]
-    const term = search.trim().toLowerCase()
-    if (term) {
-      list = list.filter(
-        (s) =>
-          s.name?.toLowerCase().includes(term) ||
-          s.phone?.replace(/\D/g, '').includes(term.replace(/\D/g, ''))
-      )
-    }
-    if (filterStage) list = list.filter((s) => s.stage === filterStage)
-    if (filterSystem) list = list.filter((s) => s.system === filterSystem)
-    if (filterGender) list = list.filter((s) => s.gender === filterGender)
-
-    list.sort((a, b) => {
-      let va = a[sortBy] ?? ''
-      let vb = b[sortBy] ?? ''
-      if (sortBy === 'name') {
-        va = String(va).toLowerCase()
-        vb = String(vb).toLowerCase()
-        return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
-      }
-      va = String(va)
-      vb = String(vb)
-      const cmp = va.localeCompare(vb, undefined, { numeric: true })
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-    return list
-  }, [students, search, filterStage, filterSystem, filterGender, sortBy, sortDir])
-
-  const toggleSort = (col) => {
-    if (sortBy === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortBy(col); setSortDir('asc') }
-  }
-
-  const exportStudentsToExcel = () => {
-    const rows = filteredAndSorted.map((s) => ({
-      [t('fields.name')]: s.name,
-      [t('fields.stage')]: t(`stages.${s.stage || 'first'}`),
-      [t('fields.system')]: t(`system.${s.system || 'general'}`),
-      [t('fields.gender')]: t(`gender.${s.gender || 'male'}`),
-      [t('fields.specialty')]: s.specialty || '--',
-      [t('fields.phone')]: s.phone || '--',
-    }))
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), t('nav.students'))
-    XLSX.writeFile(wb, 'educon-students.xlsx')
-  }
-
-  return (
-    <div className="rounded-3xl bg-white p-6 shadow">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h3 className="text-lg font-semibold">{t('nav.students')}</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onAdd}
-            className="flex items-center gap-2 rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            <Plus className="h-4 w-4" />
-            {t('actions.add')}
-          </button>
-          <button
-            type="button"
-            onClick={exportStudentsToExcel}
-            className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            {t('labels.exportStudents')}
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3">
-        <div className="relative min-w-[180px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 rtl:left-auto rtl:right-3" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('labels.searchStudents')}
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm rtl:pl-4 rtl:pr-9"
-          />
-        </div>
-        <select
-          value={filterStage}
-          onChange={(e) => setFilterStage(e.target.value)}
-          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-        >
-          <option value="">{t('labels.filterAll')} ({t('fields.stage')})</option>
-          {stageOptions.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          value={filterSystem}
-          onChange={(e) => setFilterSystem(e.target.value)}
-          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-        >
-          <option value="">{t('labels.filterAll')} ({t('fields.system')})</option>
-          {systemOptions.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          value={filterGender}
-          onChange={(e) => setFilterGender(e.target.value)}
-          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-        >
-          <option value="">{t('labels.filterAll')} ({t('fields.gender')})</option>
-          {genderOptions.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-      </div>
-
-      <div className="mt-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
-              <SortHeaderCell col="name" label={t('fields.name')} onToggle={toggleSort} />
-              <SortHeaderCell col="stage" label={t('fields.stage')} onToggle={toggleSort} />
-              <SortHeaderCell col="system" label={t('fields.system')} onToggle={toggleSort} />
-              <SortHeaderCell col="gender" label={t('fields.gender')} onToggle={toggleSort} />
-              <th className="pb-3">{t('fields.specialty')}</th>
-              <SortHeaderCell col="phone" label={t('fields.phone')} onToggle={toggleSort} />
-              <th className="pb-3">{t('labels.actions')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredAndSorted.map((student) => (
-              <tr key={student.id} className="text-slate-700 hover:bg-slate-50/50">
-                <td className="py-3 font-medium">{student.name}</td>
-                <td className="py-3">{t(`stages.${student.stage || 'first'}`)}</td>
-                <td className="py-3">{t(`system.${student.system || 'general'}`)}</td>
-                <td className="py-3">{t(`gender.${student.gender || 'male'}`)}</td>
-                <td className="py-3">{student.specialty || '--'}</td>
-                <td className="py-3">{student.phone || '--'}</td>
-                <td className="py-3">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => onView(student)}
-                      className="inline-flex items-center gap-2 text-sm font-semibold text-brand-600"
-                    >
-                      <Users className="h-4 w-4" />
-                      عرض
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onEdit(student)}
-                      className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600"
-                    >
-                      <Pencil className="h-4 w-4" />
-                      {t('actions.edit')}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filteredAndSorted.length === 0 && (
-          <p className="py-8 text-center text-sm text-slate-400">{t('empty.students')}</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function SortHeaderCell({ col, label, onToggle }) {
-  return (
-    <th
-      className="cursor-pointer select-none pb-3 text-left text-xs uppercase tracking-wider text-slate-400 hover:text-slate-600"
-      onClick={() => onToggle(col)}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        <ArrowUpDown className="h-3.5 w-3.5" />
-      </span>
-    </th>
-  )
-}
-
-function BooksTable({ t, locale, books, onAdd, onEdit, onPrint }) {
-  return (
-    <div className="rounded-3xl bg-white p-6 shadow">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-lg font-semibold">{t('nav.books')}</h3>
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex items-center gap-2 rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-        >
-          <Plus className="h-4 w-4" />
-          {t('actions.add')}
-        </button>
-      </div>
-      <div className="mt-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
-              <th className="pb-3">{t('fields.name')}</th>
-              <th className="pb-3">{t('fields.author')}</th>
-              <th className="pb-3">{t('labels.costPrice')}</th>
-              <th className="pb-3">{t('labels.sellingPrice')}</th>
-              <th className="pb-3">تقريبي</th>
-              <th className="pb-3">{t('labels.stock')}</th>
-              <th className="pb-3">الحالة</th>
-              <th className="pb-3">{t('labels.barcode')}</th>
-              <th className="pb-3">{t('labels.actions')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {books.map((book) => (
-              <tr key={book.id} className="text-slate-700">
-                <td className="py-3">{book.title}</td>
-                <td className="py-3">{book.author}</td>
-                <td className="py-3">{formatCurrency(locale, book.costPrice)}</td>
-                <td className="py-3">{formatCurrency(locale, book.sellingPrice)}</td>
-                <td className="py-3">{book.estimatedSellingPrice != null ? formatCurrency(locale, book.estimatedSellingPrice) : '--'}</td>
-                <td className="py-3">{book.stock}</td>
-                <td className="py-3">
-                  {book.isArriving ? (
-                    <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">لم يصل</span>
-                  ) : (
-                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">متاح</span>
-                  )}
-                </td>
-                <td className="py-3">{book.barcode}</td>
-                <td className="py-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => onEdit(book)}
-                      className="inline-flex items-center gap-2 text-sm font-semibold text-brand-600"
-                    >
-                      <Pencil className="h-4 w-4" />
-                      {t('actions.edit')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onPrint(book)}
-                      className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600"
-                    >
-                      <Printer className="h-4 w-4" />
-                      {t('actions.barcodePrint')}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function BooksInsightsView({ locale, rows, formatCurrency }) {
-  return (
-    <div className="rounded-3xl bg-white p-6 shadow">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-lg font-semibold">تحليل الكتب</h3>
-        <p className="text-xs text-slate-500">الأكثر مبيعًا · المحجوز · المتاح للبيع</p>
-      </div>
-      <div className="mt-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
-              <th className="pb-3">الكتاب</th>
-              <th className="pb-3">المبيعات</th>
-              <th className="pb-3">محجوز (معلّق)</th>
-              <th className="pb-3">المخزن</th>
-              <th className="pb-3">محجوز من المخزن</th>
-              <th className="pb-3">متاح للبيع</th>
-              <th className="pb-3">سعر البيع</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
-              <tr key={row.book.id} className="text-slate-700">
-                <td className="py-3">
-                  <div className="font-medium">{row.book.title}</div>
-                  <div className="text-xs text-slate-400">{row.book.author}</div>
-                </td>
-                <td className="py-3 font-semibold">{row.soldQty}</td>
-                <td className="py-3 font-semibold text-sky-700">{row.reservedQty}</td>
-                <td className="py-3">{row.book.stock}</td>
-                <td className="py-3">{row.reservedStock}</td>
-                <td className={`py-3 font-semibold ${row.availableToSell <= 0 ? 'text-rose-700' : 'text-emerald-700'}`}>{row.availableToSell}</td>
-                <td className="py-3">{formatCurrency(locale, row.book.sellingPrice)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-sm text-slate-400">
-                  لا توجد بيانات
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function ReceiptArchiveView({ locale, items, onRefresh, onOpenReceipt }) {
-  return (
-    <div className="rounded-3xl bg-white p-6 shadow">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-lg font-semibold">أرشيف الإيصالات</h3>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-        >
-          تحديث
-        </button>
-      </div>
-      <div className="mt-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
-              <th className="pb-3">الوقت</th>
-              <th className="pb-3">رقم العملية</th>
-              <th className="pb-3">النوع</th>
-              <th className="pb-3">الموظف</th>
-              <th className="pb-3">الطالب</th>
-              <th className="pb-3">الإجمالي</th>
-              <th className="pb-3">إجراء</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {items.map((it) => {
-              const payload = it.payload || {}
-              const date = it.printed_at ? new Date(it.printed_at).toLocaleString(locale) : '--'
-              return (
-                <tr key={it.id} className="text-slate-700">
-                  <td className="py-3 text-xs text-slate-500">{date}</td>
-                  <td className="py-3 font-semibold">{it.transaction_code || payload.id || '--'}</td>
-                  <td className="py-3">{it.receipt_type || payload.receiptType || '--'}</td>
-                  <td className="py-3">{it.staff_name || payload.staffName || '--'}</td>
-                  <td className="py-3">{payload.student?.name || '--'}</td>
-                  <td className="py-3 font-semibold">{formatCurrency(locale, payload.total || 0)}</td>
-                  <td className="py-3">
-                    <button
-                      type="button"
-                      onClick={() => onOpenReceipt(payload)}
-                      className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-                    >
-                      عرض/طباعة
-                    </button>
-                  </td>
-                </tr>
-              )
-            })}
-            {items.length === 0 && (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-sm text-slate-400">
-                  لا توجد إيصالات
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function AccountingView({ locale, books, report, supplies, form, onFormChange, onRefresh, onCreateSupply }) {
-  return (
-    <div className="space-y-6">
-      <div className="rounded-3xl bg-white p-6 shadow">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold">الحسابات</h3>
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-          >
-            تحديث
-          </button>
-        </div>
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
-          <StatCard title="إجمالي الإيراد" value={formatCurrency(locale, report?.revenue || 0)} />
-          <StatCard title="تكلفة البضاعة (COGS)" value={formatCurrency(locale, report?.cogs || 0)} />
-          <StatCard title="مجمل الربح" value={formatCurrency(locale, report?.gross_profit || 0)} />
-          <StatCard title="إجمالي السحوبات" value={formatCurrency(locale, report?.withdrawals || 0)} />
-          <StatCard title="رصيد الخزنة" value={formatCurrency(locale, report?.safe_balance || 0)} />
-          <StatCard title="مستحق للمورّد" value={formatCurrency(locale, report?.supplier_due || 0)} />
-        </div>
-      </div>
-
-      <div className="rounded-3xl bg-white p-6 shadow">
-        <h4 className="text-base font-semibold">توريد مخزون</h4>
-        <div className="mt-4 grid gap-3 md:grid-cols-5">
-          <select
-            value={form.bookId}
-            onChange={(e) => onFormChange((p) => ({ ...p, bookId: e.target.value }))}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-          >
-            <option value="">اختر كتاب</option>
-            {books.map((b) => (
-              <option key={b.id} value={b.id}>{b.title}</option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min="1"
-            value={form.qty}
-            onChange={(e) => onFormChange((p) => ({ ...p, qty: e.target.value }))}
-            placeholder="الكمية"
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-          />
-          <input
-            type="number"
-            min="0"
-            value={form.unitCost}
-            onChange={(e) => onFormChange((p) => ({ ...p, unitCost: e.target.value }))}
-            placeholder="سعر التوريد/كتاب"
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-          />
-          <input
-            type="number"
-            min="0"
-            value={form.paid}
-            onChange={(e) => onFormChange((p) => ({ ...p, paid: e.target.value }))}
-            placeholder="المدفوع للمورّد"
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-          />
-          <input
-            type="text"
-            value={form.supplier}
-            onChange={(e) => onFormChange((p) => ({ ...p, supplier: e.target.value }))}
-            placeholder="اسم المورّد (اختياري)"
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm"
-          />
-        </div>
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={onCreateSupply}
-            className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            تسجيل التوريد
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-3xl bg-white p-6 shadow">
-        <h4 className="text-base font-semibold">سجل التوريدات</h4>
-        <div className="mt-5 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
-                <th className="pb-3">التاريخ</th>
-                <th className="pb-3">كتاب</th>
-                <th className="pb-3">كمية</th>
-                <th className="pb-3">تكلفة/كتاب</th>
-                <th className="pb-3">الإجمالي</th>
-                <th className="pb-3">مدفوع</th>
-                <th className="pb-3">متبقي</th>
-                <th className="pb-3">المورّد</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {supplies.map((s) => (
-                <tr key={s.id} className="text-slate-700">
-                  <td className="py-3 text-xs text-slate-500">{new Date(s.timestamp).toLocaleString(locale)}</td>
-                  <td className="py-3">{books.find((b) => b.id === s.book_id)?.title || s.book_id}</td>
-                  <td className="py-3 font-semibold">{s.quantity}</td>
-                  <td className="py-3">{formatCurrency(locale, s.unit_cost)}</td>
-                  <td className="py-3 font-semibold">{formatCurrency(locale, s.total_cost)}</td>
-                  <td className="py-3">{formatCurrency(locale, s.paid_amount || 0)}</td>
-                  <td className="py-3 font-semibold text-rose-700">{formatCurrency(locale, (s.total_cost || 0) - (s.paid_amount || 0))}</td>
-                  <td className="py-3">{s.supplier_name || '--'}</td>
-                </tr>
-              ))}
-              {supplies.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-sm text-slate-400">
-                    لا توجد توريدات
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   )
 }
@@ -4846,106 +2356,6 @@ function ManagementTable({ title, actionLabel, onAdd, columns, rows, onEdit }) {
   )
 }
 
-function StatCard({ title, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-      <p className="text-xs uppercase tracking-wider text-slate-400">{title}</p>
-      <p className="mt-2 text-lg font-semibold text-slate-900">{value}</p>
-    </div>
-  )
-}
-
-function MetricBar({ label, value, valueLabel, max, color }) {
-  const width = Math.round((value / max) * 100)
-  return (
-    <div>
-      <div className="flex items-center justify-between text-xs text-slate-500">
-        <span>{label}</span>
-        <span className="font-semibold text-slate-700">{valueLabel}</span>
-      </div>
-      <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
-        <div className={`h-2 rounded-full ${color}`} style={{ width: `${width}%` }} />
-      </div>
-    </div>
-  )
-}
-
-function Modal({ children, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-      <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl">
-        <div className="flex justify-end">
-          <button type="button" onClick={onClose} className="rounded-full p-1 text-slate-500">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
-
-function ModalHeader({ title, onClose }) {
-  return (
-    <div className="flex items-center justify-between">
-      <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-      <button type="button" onClick={onClose} className="rounded-full p-1 text-slate-500">
-        <X className="h-5 w-5" />
-      </button>
-    </div>
-  )
-}
-
-function ModalActions({ t }) {
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-3">
-      <button
-        type="reset"
-        className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold"
-      >
-        {t('actions.cancel')}
-      </button>
-      <button
-        type="submit"
-        className="rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-      >
-        {t('actions.save')}
-      </button>
-    </div>
-  )
-}
-
-function InputField({ label, ...props }) {
-  return (
-    <label className="block text-sm text-slate-600">
-      <span className="mb-2 block text-xs uppercase tracking-wider text-slate-400">{label}</span>
-      <input
-        {...props}
-        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900"
-      />
-    </label>
-  )
-}
-
-function SelectField({ label, options, compact = false, ...props }) {
-  return (
-    <label className="block text-sm text-slate-600">
-      <span className="mb-2 block text-xs uppercase tracking-wider text-slate-400">{label}</span>
-      <select
-        {...props}
-        className={`w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 ${
-          compact ? 'py-2' : 'py-3'
-        }`}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
-}
 
 function StudentDetailsModal({ t, locale, student, salesHistory, pendingReservations, books, onClose, onPickup, formatCurrency, walletLog }) {
   const [activeTab, setActiveTab] = useState('history')

@@ -1,55 +1,45 @@
-# نشر Educon POS على الإنترنت
+# نشر Educon POS بطريقة إنتاجية
 
-## 1) تجهيز GitHub
-- أنشئ Repository جديد على GitHub.
-- من داخل المشروع ارفع الكود:
+## المسار المعتمد
+- الباكند: خدمة FastAPI مستقلة مع PostgreSQL مُدار.
+- الواجهة: بناء Vite ثابت يُخدم عبر Nginx أو Static Hosting.
+- الترحيلات: تُنفذ قبل تشغيل النسخة الجديدة عبر `python -m scripts.run_migrations`.
+- الفحص الصحي: يعتمد على `/health/live` و `/health/ready`.
 
-```bash
-git init
-git add .
-git commit -m "Prepare production deployment"
-git branch -M main
-git remote add origin https://github.com/<USERNAME>/<REPO>.git
-git push -u origin main
-```
-
-## 2) النشر على Railway
-- افتح Railway ثم **New Project**.
-- اختر **Deploy from GitHub repo** وحدد نفس المستودع.
-- أضف خدمة قاعدة بيانات: **PostgreSQL**.
-- أنشئ خدمة Backend من نفس الريبو بالإعدادات التالية:
+## Railway
+- الباكند:
   - Root Directory: `/`
   - Build Command: `pip install -r requirements.txt`
-  - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-  - متغيرات البيئة:
-    - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-- أنشئ خدمة Frontend من نفس الريبو بالإعدادات التالية:
+  - Pre-Deploy Command: `python -m scripts.run_migrations`
+  - Start Command: `python -m scripts.start_backend`
+- الواجهة:
   - Root Directory: `pos-frontend`
   - Build Command: `npm ci && npm run build`
   - Start Command: `npx serve -s dist -l $PORT`
-  - متغيرات البيئة:
-    - `VITE_API_BASE_URL=https://<backend-domain>.up.railway.app`
 
-## 3) ربط الدومينات
-- فعّل Public Domain لخدمة الباكند وخدمة الواجهة من Railway.
-- ضع دومين الباكند النهائي في متغير `VITE_API_BASE_URL` داخل خدمة الواجهة.
-- أعد Deploy للواجهة بعد تحديث المتغير.
+## المتغيرات المطلوبة للإنتاج
+- `APP_ENV=production`
+- `DATABASE_URL`
+- `JWT_SECRET_KEY`
+- `CORS_ALLOWED_ORIGINS`
+- `TRUSTED_HOSTS`
+- `VITE_API_BASE_URL`
 
-## 4) اختبار بعد النشر
-- افتح:
-  - `https://<frontend-domain>`
-  - `https://<backend-domain>/docs`
-- جرّب إضافة طالب + كتاب + عملية بيع + طباعة إيصال.
+## خطوات النشر
+1. شغّل خط CI/CD وتأكد من نجاح الاختبارات والبناء.
+2. نفّذ الترحيلات مرة واحدة قبل استلام الترافيك.
+3. انشر الباكند وانتظر نجاح `/health/ready`.
+4. انشر الواجهة بعد تثبيت رابط الباكند النهائي.
+5. اختبر تسجيل الدخول، البيع، الحجوزات، والمزامنة الأوفلاين.
 
-## 5) ملاحظات إنتاج مهمة
-- الحذف للطلاب والكتب معطّل على الباكند لحماية البيانات.
-- عند SQLite محليًا يتم أخذ نسخة احتياطية تلقائية.
-- في الإنتاج على Railway يتم استخدام PostgreSQL عبر `DATABASE_URL`.
-- خدمة الباكند على Railway لن تعمل بدون `DATABASE_URL`.
-- بناء الواجهة في الإنتاج سيفشل إذا لم يتم تعريف `VITE_API_BASE_URL`.
+## الأمان والتشغيل
+- لا تستخدم أي سر داخل المستودع.
+- فعّل HTTPS فقط عبر المنصة أو الـ reverse proxy.
+- احصر `/metrics` على شبكة المراقبة فقط.
+- استخدم النسخ الاحتياطية المجدولة واختبر الاستعادة دوريًا.
 
-## 6) ملفات مضافة لتسهيل Railway
-- [Procfile](file:///e:/شغل/شغل/project/Procfile) لخدمة الباكند.
-- [railway.json](file:///e:/شغل/شغل/project/railway.json) لخدمة الباكند.
-- [pos-frontend/Procfile](file:///e:/شغل/شغل/project/pos-frontend/Procfile) لخدمة الواجهة.
-- [pos-frontend/railway.json](file:///e:/شغل/شغل/project/pos-frontend/railway.json) لخدمة الواجهة.
+## مراجع التشغيل
+- [DEPLOYMENT.md](file:///e:/شغل/شغل/project/DEPLOYMENT.md)
+- [ROLLBACK.md](file:///e:/شغل/شغل/project/ROLLBACK.md)
+- [RECOVERY.md](file:///e:/شغل/شغل/project/RECOVERY.md)
+- [OPERATIONS_CHECKLIST.md](file:///e:/شغل/شغل/project/OPERATIONS_CHECKLIST.md)

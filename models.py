@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -43,6 +43,36 @@ class Student(Base):
 
     transactions = relationship("Transaction", back_populates="student")
     reservations = relationship("Reservation", back_populates="student")
+    wallet_entries = relationship("StudentWalletEntry", back_populates="student")
+
+
+class StudentWalletEntry(Base):
+    """Immutable append-only ledger of student wallet mutations.
+
+    NOTE: money representation is intentionally the legacy Float type for this
+    foundational wave. A later phase migrates amounts to minor units (BIGINT).
+    The `amount` is signed: negative = debit/out, positive = credit/in.
+    """
+
+    __tablename__ = "student_wallet_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    entry_type = Column(String, nullable=False, index=True)
+    amount = Column(Float, nullable=False, default=0.0)
+    direction = Column(String, nullable=False)
+    source_type = Column(String, nullable=True, index=True)
+    source_id = Column(Integer, nullable=True, index=True)
+    operation_id = Column(String, nullable=False, unique=True, index=True)
+    balance_before = Column(Float, nullable=False, default=0.0)
+    balance_after = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_by = Column(String, nullable=True)
+    device_id = Column(String, nullable=True, index=True)
+    reversal_of_entry_id = Column(Integer, ForeignKey("student_wallet_entries.id"), nullable=True)
+    metadata_json = Column(Text, nullable=True)
+
+    student = relationship("Student", back_populates="wallet_entries")
 
 
 class Transaction(Base):
@@ -97,7 +127,12 @@ class SafeTransaction(Base):
     type = Column(String, nullable=False)
     reason = Column(String, nullable=True)
     staff_name = Column(String, nullable=False)
+    source_type = Column(String, nullable=True, index=True)
+    source_id = Column(Integer, nullable=True, index=True)
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True, index=True)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    journal_entry = relationship("JournalEntry", foreign_keys=[journal_entry_id])
 
 
 class AuditLog(Base):
@@ -116,6 +151,11 @@ class InventorySession(Base):
     id = Column(Integer, primary_key=True, index=True)
     staff_name = Column(String, nullable=False)
     total_cash_found = Column(Float, nullable=False)
+    expected_cash = Column(Float, nullable=False, default=0.0)
+    variance_amount = Column(Float, nullable=False, default=0.0)
+    status = Column(String, nullable=False, default="reconciled")
+    supervisor_name = Column(String, nullable=True)
+    approval_notes = Column(Text, nullable=True)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -135,6 +175,122 @@ class Supply(Base):
     book = relationship("Book")
 
 
+class LedgerAccount(Base):
+    __tablename__ = "ledger_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    account_type = Column(String, nullable=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    allow_manual_entries = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class JournalEntry(Base):
+    __tablename__ = "journal_entries"
+    __table_args__ = (UniqueConstraint("source_type", "source_id", name="uq_journal_entry_source"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_number = Column(String, nullable=False, unique=True, index=True)
+    source_type = Column(String, nullable=True, index=True)
+    source_id = Column(Integer, nullable=True, index=True)
+    reference = Column(String, nullable=True, index=True)
+    description = Column(String, nullable=False)
+    reason = Column(String, nullable=True)
+    staff_name = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="posted", index=True)
+    period_key = Column(String, nullable=False, index=True)
+    event_timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    posted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_reversal = Column(Boolean, nullable=False, default=False)
+    reversal_of_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    lines = relationship("JournalLine", back_populates="journal_entry", cascade="all, delete-orphan")
+
+
+class JournalLine(Base):
+    __tablename__ = "journal_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("ledger_accounts.id"), nullable=False, index=True)
+    line_type = Column(String, nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    memo = Column(String, nullable=True)
+
+    journal_entry = relationship("JournalEntry", back_populates="lines")
+    account = relationship("LedgerAccount")
+
+
+class FinancialAuditTrail(Base):
+    __tablename__ = "financial_audit_trail"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)
+    entity_id = Column(Integer, nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    staff_name = Column(String, nullable=False)
+    reason = Column(String, nullable=True)
+    previous_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=True)
+    originating_transaction_type = Column(String, nullable=True, index=True)
+    originating_transaction_id = Column(Integer, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class FinancialPeriod(Base):
+    __tablename__ = "financial_periods"
+    __table_args__ = (UniqueConstraint("period_key", "period_type", name="uq_financial_period_key_type"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    period_key = Column(String, nullable=False, index=True)
+    period_type = Column(String, nullable=False, index=True)
+    starts_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="open", index=True)
+    closed_at = Column(DateTime, nullable=True)
+    closed_by = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+
+
+class CashDrawerSession(Base):
+    __tablename__ = "cash_drawer_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    staff_name = Column(String, nullable=False, index=True)
+    opening_balance = Column(Float, nullable=False, default=0.0)
+    expected_cash = Column(Float, nullable=True)
+    counted_cash = Column(Float, nullable=True)
+    variance_amount = Column(Float, nullable=True)
+    status = Column(String, nullable=False, default="open", index=True)
+    supervisor_name = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    opened_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    closed_at = Column(DateTime, nullable=True, index=True)
+
+
+class ReconciliationRun(Base):
+    __tablename__ = "reconciliation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    reconciliation_type = Column(String, nullable=False, index=True)
+    period_key = Column(String, nullable=False, index=True)
+    starts_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    expected_cash = Column(Float, nullable=False, default=0.0)
+    counted_cash = Column(Float, nullable=True)
+    variance_amount = Column(Float, nullable=False, default=0.0)
+    exception_count = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="balanced", index=True)
+    staff_name = Column(String, nullable=False)
+    supervisor_name = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class ReceiptArchive(Base):
     __tablename__ = "receipt_archives"
 
@@ -144,6 +300,26 @@ class ReceiptArchive(Base):
     staff_name = Column(String, nullable=True)
     payload = Column(Text, nullable=False)
     printed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SyncReplayRecord(Base):
+    __tablename__ = "sync_replay_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    operation_id = Column(String, nullable=False, unique=True, index=True)
+    operation_type = Column(String, nullable=True, index=True)
+    request_method = Column(String, nullable=False)
+    request_path = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)
+    replay_token = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="processing", index=True)
+    response_status = Column(Integer, nullable=True)
+    response_body = Column(Text, nullable=True)
+    error_detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class User(Base):

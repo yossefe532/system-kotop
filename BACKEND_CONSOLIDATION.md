@@ -8,12 +8,11 @@
   - `models.py`
   - `schemas.py`
 
-## Legacy Paths (Now Isolated)
-- `backend/app.py` is now a compatibility shim importing `main.app`.
+## Legacy Paths (Isolated)
+- `backend/app.py` is a compatibility shim importing `main.app`.
 - `backend/database.py`, `backend/models.py`, and `backend/schemas.py` are compatibility shims importing canonical modules.
-- `src/worker.py` is explicitly gated:
-  - returns `410` unless `ENABLE_LEGACY_WORKER=true`.
-  - prevents accidental deployment of stale backend logic.
+- The legacy Cloudflare worker (`src/worker.py` + root `wrangler.toml`) and the old JS worker (`backend/src/index.js`, `backend/wrangler.toml`, `backend/Dockerfile`) have been removed.
+- Any Cloudflare route still serving `src/worker.py` must be deleted in the Cloudflare dashboard; the worker returns `410 Gone` unless `ENABLE_LEGACY_WORKER=true`, so it is inert until removed.
 
 ## Incremental Modular Structure
 - `app/core/config.py` centralizes top-level app configuration access.

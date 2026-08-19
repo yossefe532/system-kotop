@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 
 from auth.config import get_auth_config
+from app.core.runtime import current_app_env
 
 
 @dataclass(frozen=True)
@@ -13,11 +14,10 @@ class AppConfig:
 
 
 def get_app_config() -> AppConfig:
-    env = os.getenv("APP_ENV", "development").strip().lower()
+    env = current_app_env()
     return AppConfig(
         app_name="Educon POS API",
         app_env=env,
         api_prefix="/",
         auth=get_auth_config(),
     )
-

@@ -1,3 +1,5 @@
+import { DEMO_DATA_ENABLED } from '../../demoData'
+
 export const hydrateCoreData = async ({
   apiRequest,
   storedBooks,
@@ -7,10 +9,10 @@ export const hydrateCoreData = async ({
   mapApiBookToUi,
   mapApiStudentToUi,
 }) => {
-  let apiBooks = await apiRequest('/books')
-  let apiStudents = await apiRequest('/students')
+  let apiBooks = await apiRequest('/books?limit=200')
+  let apiStudents = await apiRequest('/students?limit=200')
 
-  if (Array.isArray(apiBooks) && apiBooks.length === 0 && Array.isArray(storedBooks) && storedBooks.length) {
+  if (DEMO_DATA_ENABLED && Array.isArray(apiBooks) && apiBooks.length === 0 && Array.isArray(storedBooks) && storedBooks.length) {
     for (const b of storedBooks) {
       const draft = {
         title: b.title,
@@ -23,10 +25,10 @@ export const hydrateCoreData = async ({
       }
       await apiRequest('/books', { method: 'POST', body: JSON.stringify(mapUiBookToApi(draft)) })
     }
-    apiBooks = await apiRequest('/books')
+    apiBooks = await apiRequest('/books?limit=200')
   }
 
-  if (Array.isArray(apiStudents) && apiStudents.length === 0 && Array.isArray(storedStudents) && storedStudents.length) {
+  if (DEMO_DATA_ENABLED && Array.isArray(apiStudents) && apiStudents.length === 0 && Array.isArray(storedStudents) && storedStudents.length) {
     for (const s of storedStudents) {
       const draft = {
         name: s.name,
@@ -39,12 +41,12 @@ export const hydrateCoreData = async ({
       }
       await apiRequest('/students', { method: 'POST', body: JSON.stringify(mapUiStudentToApi(draft)) })
     }
-    apiStudents = await apiRequest('/students')
+    apiStudents = await apiRequest('/students?limit=200')
   }
 
   const uiBooks = Array.isArray(apiBooks) ? apiBooks.map(mapApiBookToUi) : []
   const uiStudents = Array.isArray(apiStudents) ? apiStudents.map(mapApiStudentToUi) : []
-  const apiReservations = await apiRequest('/reservations')
+  const apiReservations = await apiRequest('/reservations?limit=200')
   const bookById = new Map(uiBooks.map((b) => [b.id, b]))
   const pending = Array.isArray(apiReservations)
     ? apiReservations
@@ -92,9 +94,9 @@ export const buildPendingReservations = (apiReservations, uiBooks) => {
 
 export const fetchCoreSnapshot = async ({ apiRequest, mapApiBookToUi, mapApiStudentToUi }) => {
   const [apiBooks, apiStudents, apiReservations] = await Promise.all([
-    apiRequest('/books'),
-    apiRequest('/students'),
-    apiRequest('/reservations'),
+    apiRequest('/books?limit=200'),
+    apiRequest('/students?limit=200'),
+    apiRequest('/reservations?limit=200'),
   ])
   const uiBooks = Array.isArray(apiBooks) ? apiBooks.map(mapApiBookToUi) : []
   const uiStudents = Array.isArray(apiStudents) ? apiStudents.map(mapApiStudentToUi) : []
@@ -103,12 +105,12 @@ export const fetchCoreSnapshot = async ({ apiRequest, mapApiBookToUi, mapApiStud
 }
 
 export const fetchReceiptArchive = async (apiRequest) => {
-  const data = await apiRequest('/receipt-archive')
+  const data = await apiRequest('/receipt-archive?limit=200')
   return Array.isArray(data) ? data : []
 }
 
 export const fetchBooksInsights = async (apiRequest, books) => {
-  const stats = await apiRequest('/reports/books')
+  const stats = await apiRequest('/reports/books?limit=200')
   const rows = Array.isArray(stats) ? stats : []
   const byId = new Map(rows.map((r) => [r.book_id, r]))
   const merged = books.map((b) => {
@@ -126,7 +128,7 @@ export const fetchBooksInsights = async (apiRequest, books) => {
 }
 
 export const fetchAccountingData = async (apiRequest) => {
-  const [finance, suppliesList] = await Promise.all([apiRequest('/reports/finance'), apiRequest('/supplies')])
+  const [finance, suppliesList] = await Promise.all([apiRequest('/reports/finance'), apiRequest('/supplies?limit=200')])
   return {
     finance: finance || null,
     supplies: Array.isArray(suppliesList) ? suppliesList : [],

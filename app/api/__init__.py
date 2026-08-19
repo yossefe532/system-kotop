@@ -1,4 +1,3 @@
-"""Canonical FastAPI app export."""
+"""API package namespace."""
 
-from app.bootstrap import app  # noqa: F401
-
+__all__ = []

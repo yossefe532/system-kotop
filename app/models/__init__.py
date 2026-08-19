@@ -11,6 +11,7 @@ from models import (  # noqa: F401
     Role,
     SafeTransaction,
     Student,
+    StudentWalletEntry,
     Supply,
     Transaction,
     TransactionItem,

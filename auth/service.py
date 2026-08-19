@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -15,10 +15,12 @@ from auth.security import (
     now_utc,
     verify_password,
 )
+from app.core.security import get_security_config
 from models import RefreshToken, Role, User
 
 logger = logging.getLogger("auth")
 auth_config = get_auth_config()
+security_config = get_security_config()
 ROLE_NAMES = ["admin", "manager", "cashier", "viewer"]
 
 
@@ -37,6 +39,14 @@ def _to_user_me(user: User) -> dict:
     }
 
 
+def _coerce_utc_comparable(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.replace(tzinfo=None)
+
+
 def ensure_roles_and_admin(db: Session) -> None:
     roles_by_name = {r.name: r for r in db.query(Role).all()}
     touched = False
@@ -53,7 +63,7 @@ def ensure_roles_and_admin(db: Session) -> None:
     init_password = auth_config.init_admin_password
     if not init_username or not init_password:
         has_users = db.query(User.id).first() is not None
-        if not has_users:
+        if not has_users and security_config.allow_bootstrap_admin_fallback:
             init_username = "admin"
             init_password = "admin12345"
             logger.warning("bootstrap_admin_fallback_enabled username=admin")
@@ -86,7 +96,8 @@ def authenticate_user(db: Session, username: str, password: str, client_ip: str 
         observe_auth_event("login_failed_user_not_found")
         return None
 
-    if user.locked_until and user.locked_until > now_utc():
+    current_time = _coerce_utc_comparable(now_utc())
+    if user.locked_until and _coerce_utc_comparable(user.locked_until) > current_time:
         logger.warning("login_blocked user=%s reason=locked ip=%s", username, client_ip)
         observe_auth_event("login_blocked_locked")
         return None
@@ -153,7 +164,8 @@ def rotate_refresh_token(db: Session, refresh_token: str, client_ip: str | None,
     if not token_entry:
         observe_auth_event("refresh_rejected_revoked")
         raise AuthTokenError("Refresh token is revoked")
-    if token_entry.expires_at <= now_utc():
+    current_time = _coerce_utc_comparable(now_utc())
+    if _coerce_utc_comparable(token_entry.expires_at) <= current_time:
         observe_auth_event("refresh_rejected_expired")
         raise AuthTokenError("Refresh token expired")
 

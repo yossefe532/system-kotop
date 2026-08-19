@@ -3,7 +3,9 @@ import os
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-ALEMBIC_HEAD_REVISION = "20261210_0001"
+from app.core.runtime import current_app_env, is_protected_env
+
+ALEMBIC_HEAD_REVISION = "20260816_0005"
 
 
 def _as_bool(value: str | None) -> bool:
@@ -16,8 +18,7 @@ def _schema_enforcement_enabled() -> bool:
     explicit = os.getenv("ENFORCE_SCHEMA_VERSION")
     if explicit is not None:
         return _as_bool(explicit)
-    app_env = os.getenv("APP_ENV", "").strip().lower()
-    return bool(os.getenv("RAILWAY_ENVIRONMENT")) or app_env in {"prod", "production"}
+    return is_protected_env(current_app_env())
 
 
 def assert_schema_is_current(engine: Engine) -> None:
@@ -40,4 +41,3 @@ def assert_schema_is_current(engine: Engine) -> None:
             f"Database schema revision mismatch. Expected {expected}, got {current}. "
             "Run `alembic upgrade head` before startup."
         )
-

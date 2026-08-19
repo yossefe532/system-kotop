@@ -5,13 +5,14 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   base: './',
   plugins: [react()],
-  server: {
-    proxy: {
-      '/api': {
-        target:
-          'https://thr-72b94cad-educon-pos-backend-api.nxcode-io.workers.dev',
-        changeOrigin: true,
-      },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.js'],
+    include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
+    exclude: ['e2e/**', '../e2e/**', 'playwright.config.js', '../playwright.config.js', 'node_modules/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
     },
   },
 })

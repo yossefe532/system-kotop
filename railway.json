@@ -5,8 +5,16 @@
     "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "uvicorn main:app --host 0.0.0.0 --port $PORT",
+    "preDeployCommand": "python -m scripts.run_migrations",
+    "startCommand": "python -m scripts.start_backend",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
+  },
+  "env": {
+    "APP_ENV": "production",
+    "ENFORCE_SCHEMA_VERSION": "true",
+    "ALLOW_BOOTSTRAP_ADMIN_FALLBACK": "false",
+    "WALLET_LEDGER_ENABLED": "false",
+    "VITE_ENABLE_DEMO_SEED": "false"
   }
 }

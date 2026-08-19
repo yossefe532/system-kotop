@@ -1,9 +1,0 @@
-name = "educon-pos-backend-api"
-main = "src/worker.py"
-compatibility_date = "2024-12-01"
-compatibility_flags = ["python_workers"]
-
-[[d1_databases]]
-binding = "DB"
-database_name = "nxcode-72b94cad-pos-db"
-database_id = "30761236-3ac3-4111-9239-39143973f5c6"
