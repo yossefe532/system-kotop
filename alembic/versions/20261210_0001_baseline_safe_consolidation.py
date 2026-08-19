@@ -60,7 +60,7 @@ def upgrade() -> None:
             sa.Column("estimated_selling_price", sa.Float(), nullable=True),
             sa.Column("total_stock", sa.Integer(), nullable=False, server_default=sa.text("0")),
             sa.Column("reserved_stock", sa.Integer(), nullable=False, server_default=sa.text("0")),
-            sa.Column("is_arriving", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+            sa.Column("is_arriving", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         )
     else:
         if not _has_column(inspector, "books", "cost_price"):
@@ -76,7 +76,7 @@ def upgrade() -> None:
         if not _has_column(inspector, "books", "reserved_stock"):
             op.add_column("books", sa.Column("reserved_stock", sa.Integer(), nullable=False, server_default=sa.text("0")))
         if not _has_column(inspector, "books", "is_arriving"):
-            op.add_column("books", sa.Column("is_arriving", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+            op.add_column("books", sa.Column("is_arriving", sa.Boolean(), nullable=False, server_default=sa.text("false")))
 
         # Migrate old legacy columns when present.
         if _has_column(inspector, "books", "price") and _has_column(inspector, "books", "selling_price"):
@@ -271,7 +271,7 @@ def upgrade() -> None:
             sa.Column("username", sa.String(), nullable=False),
             sa.Column("full_name", sa.String(), nullable=False),
             sa.Column("hashed_password", sa.String(), nullable=False),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
             sa.Column("failed_login_attempts", sa.Integer(), nullable=False, server_default=sa.text("0")),
             sa.Column("locked_until", sa.DateTime(), nullable=True),
             sa.Column("token_version", sa.Integer(), nullable=False, server_default=sa.text("0")),
